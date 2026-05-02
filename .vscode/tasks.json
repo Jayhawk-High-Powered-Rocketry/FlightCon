@@ -1,0 +1,110 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "build calibration",
+			"type": "shell",
+			"command": "platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build calibration full path",
+			"type": "shell",
+			"command": "/Users/rylandedwards/.platformio/penv/bin/platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build calibration fixed",
+			"type": "shell",
+			"command": "/Users/rylandedwards/.platformio/penv/bin/platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build calibration dir",
+			"type": "shell",
+			"command": "/Users/rylandedwards/.platformio/penv/bin/platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build calibration one file",
+			"type": "shell",
+			"command": "/Users/rylandedwards/.platformio/penv/bin/platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build calibration linked",
+			"type": "shell",
+			"command": "/Users/rylandedwards/.platformio/penv/bin/platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build interactive calibration",
+			"type": "shell",
+			"command": "/Users/rylandedwards/.platformio/penv/bin/platformio",
+			"args": [
+				"run",
+				"--environment",
+				"esp32dev_calibration"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$platformio"
+			],
+			"group": "build"
+		}
+	]
+}
