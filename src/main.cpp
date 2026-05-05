@@ -5,6 +5,22 @@
 #include "bar.h"
 #include "servo.h"
 
+#ifdef ENABLE_OTA
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+#endif
+
+#ifdef ENABLE_OTA // OTA enabled via build flag in platformio.ini
+static bool otaEnabled = false;
+#endif
+
+// README: How to run:
+
+// pio run -t upload
+// -> Get IP Address from console:
+// pio run -t upload --upload-port ADDR (e.g., 192.168.1.50)
+
+
 // ─── Transmit interval ────────────────────────────────────────────────────────
 static constexpr uint32_t kTransmitIntervalMs = 50;
 static uint32_t lastTxMs = 0;
@@ -25,13 +41,13 @@ static constexpr float kMaxTiltDeg = 30.0f;
 // Airbrake deployment altitude target (AGL). Must be above lockout.
 // Adjust based on OpenRocket simulation for your motor + airframe.
 static constexpr float kDeployAltM = 2500.0f;
-static constexpr float kDeployHysteresisM = 1.0f;  // avoids chattering
+static constexpr float kDeployHysteresisM = 10.0f;  // avoids chattering
 
 // ─── Liftoff / burnout detection ─────────────────────────────────────────────
 
 // Liftoff: vertical accel (Y axis) exceeds this threshold (m/s^2)
-// 1.5G = ~14.7 m/s^2. Tune if needed.
-static constexpr float kLiftoffAccelMs2 = 14.7f;
+// 5G -> mps2. Tune if needed.
+static constexpr float kLiftoffAccelMs2 = 49.05f;
 
 // Burnout: vertical accel drops below this (motor off, ~0G net)
 // Using 0 m/s^2 — gravity is already removed by BNO055 linear accel
@@ -90,6 +106,41 @@ static void deployAirbrakes()
     }
 }
 
+#ifdef ENABLE_OTA
+static void initOTA()
+{
+    WiFi.mode(WIFI_STA);
+
+    WiFi.begin("Raymann", "Flerds@1!");
+
+    Serial.print("[OTA] Connecting WiFi");
+
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
+        delay(250);
+        Serial.print(".");
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("\n[OTA] WiFi failed — OTA disabled");
+        otaEnabled = false;
+        return;
+    }
+
+    // 🔑 DHCP-assigned IP (this is what matters now)
+    Serial.printf("\n[OTA] Connected\n");
+    Serial.printf("[OTA] IP address: %s\n", WiFi.localIP().toString().c_str());
+
+    ArduinoOTA.setHostname("esp32-flight");
+    ArduinoOTA.setPassword("Flerds@1!");
+
+    ArduinoOTA.begin();
+    otaEnabled = true;
+
+    Serial.println("[OTA] Ready");
+}
+#endif
+
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 void setup()
@@ -126,6 +177,10 @@ void setup()
         while (true) { delay(1000); }
     }
 
+    #ifdef ENABLE_OTA
+    initOTA();
+    #endif
+
     // 7.3.1 — ensure neutral state at boot
     servo_set_angle(kServoChannel, kNeutralAngle);
     airbrakeOut = false;
@@ -138,6 +193,10 @@ void setup()
 void loop()
 {
     transmitterPoll();
+
+    #ifdef ENABLE_OTA
+    if (otaEnabled) ArduinoOTA.handle();
+    #endif
 
     // ── Sensor reads ──────────────────────────────────────────────────────────
     float temp, pressure, altAGL;
