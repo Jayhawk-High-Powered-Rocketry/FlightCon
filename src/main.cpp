@@ -55,7 +55,7 @@ enum class FlightState {
     DESCENDED   // Past apogee, below lockout altitude. Flight over.
 };
 
-static FlightState state        = FlightState::PAD;
+static FlightState state        = FlightState::COAST; // TODO: PUT THIS BACK TO PAD -- COAST FOR GROUND TESTING
 static uint32_t    boostStartMs = 0;
 static bool        airbrakeOut  = false;
 static float       lastAltM     = 0.0f;
@@ -99,8 +99,7 @@ void setup()
     delay(200);
 
     if (!imuInit()) {
-        Serial.println("[MAIN] IMU init failed, halting.");
-        while (true) { delay(1000); }
+        Serial.println("[MAIN] IMU unavailable — continuing without IMU.");
     }
 
     if (!transmitterInit()) {
