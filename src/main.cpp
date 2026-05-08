@@ -72,9 +72,13 @@ static FlightState state        = FlightState::COAST;
 static uint32_t    boostStartMs = 0;
 static bool        airbrakeOut  = false;
 static float       lastAltM     = 0.0f;
+static uint32_t apogeeConditionStartMs = 0;
+static constexpr uint32_t kApogeeConfirmMs = 2000; // 3 seconds
 
 // Cache last Kalman state — always have something to transmit
 static KfState lastKf = {0.0f, 0.0f};
+static float baroBuffer[5] = {0};
+static int baroIdx = 0;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -106,6 +110,28 @@ static void deployAirbrakes()
         airbrakeOut = true;
         Serial.println("[CTRL] Airbrakes DEPLOYED");
     }
+}
+
+static float median5(const float values[5])
+{
+    float sorted[5];
+
+    for (int i = 0; i < 5; i++) {
+        sorted[i] = values[i];
+    }
+
+    // Simple sort for 5 values
+    for (int i = 0; i < 4; i++) {
+        for (int j = i + 1; j < 5; j++) {
+            if (sorted[j] < sorted[i]) {
+                float temp = sorted[i];
+                sorted[i] = sorted[j];
+                sorted[j] = temp;
+            }
+        }
+    }
+
+    return sorted[2]; // middle value
 }
 
 // ─── Setup ───────────────────────────────────────────────────────────────────
@@ -168,6 +194,10 @@ void setup()
 
     kf_init(initAlt);
     lastKf = {initAlt, 0.0f};
+    for (int i = 0; i < 5; i++) {
+        baroBuffer[i] = initAlt;
+    }
+    baroIdx = 0;
 
     lastBaroMs   = millis();
     lastKalmanMs = millis();
@@ -205,9 +235,25 @@ void loop()
             // and verified in that orientation. Bench accel noise causes
             // Kalman velocity explosion. Re-enable for flight:
             //   float accelInput = imuOk ? imu.accel_y : 0.0f;
-            float accelInput = 0.0f;
+            float accelInput = 0.0f; // TODO: Replace me back
 
-            lastKf = kf_update(baroAlt, accelInput, true, dt_s);
+            // TODO: Replace back deadband
+            // if (imuOk && state != FlightState::PAD && state != FlightState::DESCENDED) {
+            //     accelInput = imu.accel_y;
+
+            //     // Kill tiny bias/noise near zero
+            //     if (fabsf(accelInput) < 0.25f) {
+            //         accelInput = 0.0f;
+            //     }
+            // }
+
+
+            baroBuffer[baroIdx] = baroAlt;
+            baroIdx = (baroIdx + 1) % 5;
+
+            // Feed median to Kalman instead of raw reading
+            float baroFiltered = median5(baroBuffer);
+            lastKf = kf_update(baroFiltered, accelInput, true, dt_s);
         }
     }
 
@@ -217,7 +263,8 @@ void loop()
     // DESCENDED: on ground after landing
     // Prevents baro noise from drifting velocity when there is no real motion.
     if (state == FlightState::PAD || state == FlightState::DESCENDED) {
-        lastKf.velocity_ms = 0.0f;
+        kf_zero_velocity();
+        lastKf = kf_get_state();
     }
 
     // ── State machine ─────────────────────────────────────────────────────────
@@ -289,13 +336,31 @@ void loop()
                     retractAirbrakes("below deploy alt");
                 }
 
-                // Apogee: velocity negative AND altitude falling
-                // Require both to avoid single noisy reading triggering transition
-                if (lastKf.velocity_ms < 0.0f && altNow < lastAltM) {
-                    retractAirbrakes("apogee reached");
-                    state = FlightState::DESCENDING;
-                    Serial.printf("[SM] COAST -> DESCENDING (alt=%.1fm vel=%.1fm/s)\n",
-                                  lastKf.altitude_m, lastKf.velocity_ms);
+                // Apogee candidate: velocity negative AND altitude falling
+                // Must stay true continuously for X seconds before changing state
+                bool apogeeCondition = (lastKf.velocity_ms < 0.0f && altNow < lastAltM);
+
+                if (apogeeCondition) {
+                    if (apogeeConditionStartMs == 0) {
+                        apogeeConditionStartMs = millis();
+                        Serial.println("[SM] Apogee condition detected — starting 3s confirmation timer");
+                    }
+
+                    if (millis() - apogeeConditionStartMs >= kApogeeConfirmMs) {
+                        retractAirbrakes("apogee reached");
+                        state = FlightState::DESCENDING;
+                        apogeeConditionStartMs = 0;
+
+                        Serial.printf("[SM] COAST -> DESCENDING after 3s confirmation (alt=%.1fm vel=%.1fm/s)\n",
+                                    lastKf.altitude_m, lastKf.velocity_ms);
+                    }
+                } else {
+                    // Reset timer if the condition breaks even once
+                    if (apogeeConditionStartMs != 0) {
+                        Serial.println("[SM] Apogee condition lost — confirmation timer reset");
+                    }
+
+                    apogeeConditionStartMs = 0;
                 }
             }
             break;
@@ -337,8 +402,8 @@ void loop()
 
     // ── Serial debug ──────────────────────────────────────────────────────────
     Serial.printf(
-        "[DATA] %-11s | AltKF=%6.1fm BaroAlt=%6.1fm | VelKF=%6.2fm/s | "
-        "AccY=%6.1f Tilt=%5.1f° | Brake=%d\n",
+        "[DATA] %-11s | AltKF=%6.1fm BaroAlt=%6.1fm | VelKF=%6.3fm/s | "
+        "AccY=%6.2f Tilt=%5.1f° | Brake=%d\n",
         stateLabel(state),
         lastKf.altitude_m,
         barOk ? baroAlt : -999.0f,

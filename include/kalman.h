@@ -85,9 +85,18 @@
 // Currently set for BARO-ONLY operation (no IMU).
 // When IMU arrives: set KF_Q_VELOCITY = 1.0, KF_R_ALTITUDE = 1.0
 
+// Test
+// #define KF_Q_ALTITUDE   0.1f   // metres^2    — altitude process noise
+// #define KF_Q_VELOCITY   1.0f    // (m/s)^2     — velocity process noise (low = stable without IMU)
+// #define KF_R_ALTITUDE   1.0f   // metres^2    — baro noise variance (measure and tune this)
+
+// Bench
 #define KF_Q_ALTITUDE   0.01f   // metres^2    — altitude process noise
-#define KF_Q_VELOCITY   0.01f    // (m/s)^2     — velocity process noise (low = stable without IMU)
-#define KF_R_ALTITUDE   15.0f   // metres^2    — baro noise variance (measure and tune this)
+#define KF_Q_VELOCITY   0.001f    // (m/s)^2     — velocity process noise (low = stable without IMU)
+#define KF_R_ALTITUDE   2.0f   // metres^2    — baro noise variance (measure and tune this)
+
+// TODO: Change KF tuning based on flight phase
+
 
 // ─── Output structure ─────────────────────────────────────────────────────────
 
@@ -125,3 +134,6 @@ KfState kf_update(float baro_alt_m,
  * @brief  Return the last computed KfState without running a new cycle.
  */
 KfState kf_get_state();
+
+
+void kf_zero_velocity();
