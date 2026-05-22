@@ -81,21 +81,62 @@
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
-// ─── Tuning constants ─────────────────────────────────────────────────────────
-// Currently set for BARO-ONLY operation (no IMU).
-// When IMU arrives: set KF_Q_VELOCITY = 1.0, KF_R_ALTITUDE = 1.0
+// ─── Tuning constants (runtime adjustable) ──────────────────────────────────
+// Defaults are conservative "bench" values for baro-only operation.
+// These are exposed as variables so code can switch flight-phase tunings at
+// runtime. Use `kf_set_phase()` to select a recommended profile or
+// `kf_set_tuning()` to apply custom values.
 
-// Test
-// #define KF_Q_ALTITUDE   0.1f   // metres^2    — altitude process noise
-// #define KF_Q_VELOCITY   1.0f    // (m/s)^2     — velocity process noise (low = stable without IMU)
-// #define KF_R_ALTITUDE   1.0f   // metres^2    — baro noise variance (measure and tune this)
+// Runtime tunable variables (defined in src/kalman.cpp)
+extern float KF_Q_ALTITUDE;   // metres^2    — altitude process noise
+extern float KF_Q_VELOCITY;   // (m/s)^2     — velocity process noise
+extern float KF_R_ALTITUDE;   // metres^2    — baro measurement noise variance
 
-// Bench
-#define KF_Q_ALTITUDE   0.01f   // metres^2    — altitude process noise
-#define KF_Q_VELOCITY   0.001f    // (m/s)^2     — velocity process noise (low = stable without IMU)
-#define KF_R_ALTITUDE   2.0f   // metres^2    — baro noise variance (measure and tune this)
+// Recommended constants for each flight phase (read-only helpers)
+static constexpr float KF_TUNE_PAD_Q_ALT   = 0.01f;
+static constexpr float KF_TUNE_PAD_Q_VEL   = 0.001f;
+static constexpr float KF_TUNE_PAD_R_ALT   = 2.0f;
 
-// TODO: Change KF tuning based on flight phase
+static constexpr float KF_TUNE_LIFTOFF_Q_ALT = 0.1f;
+static constexpr float KF_TUNE_LIFTOFF_Q_VEL = 2.0f;
+static constexpr float KF_TUNE_LIFTOFF_R_ALT = 4.0f;
+
+static constexpr float KF_TUNE_BOOST_Q_ALT = 1.0f;
+static constexpr float KF_TUNE_BOOST_Q_VEL = 5.0f;
+static constexpr float KF_TUNE_BOOST_R_ALT = 8.0f;
+
+static constexpr float KF_TUNE_COAST_Q_ALT = 0.1f;
+static constexpr float KF_TUNE_COAST_Q_VEL = 2.0f;
+static constexpr float KF_TUNE_COAST_R_ALT = 1.5f;
+
+static constexpr float KF_TUNE_APOGEE_Q_ALT = 0.05f;
+static constexpr float KF_TUNE_APOGEE_Q_VEL = 0.5f;
+static constexpr float KF_TUNE_APOGEE_R_ALT = 1.0f;
+
+static constexpr float KF_TUNE_DESCENT_Q_ALT = 0.02f;
+static constexpr float KF_TUNE_DESCENT_Q_VEL = 0.1f;
+static constexpr float KF_TUNE_DESCENT_R_ALT = 1.5f;
+
+static constexpr float KF_TUNE_LANDING_Q_ALT = 0.5f;
+static constexpr float KF_TUNE_LANDING_Q_VEL = 1.0f;
+static constexpr float KF_TUNE_LANDING_R_ALT = 4.0f;
+
+// Flight phase enum and runtime API
+typedef enum {
+    KF_PHASE_PAD = 0,
+    KF_PHASE_LIFTOFF,
+    KF_PHASE_BOOST,
+    KF_PHASE_COAST,
+    KF_PHASE_APOGEE,
+    KF_PHASE_DESCENT,
+    KF_PHASE_LANDING
+} KfFlightPhase;
+
+/** Set tuning to one of the predefined flight phases. */
+void kf_set_phase(KfFlightPhase phase);
+
+/** Apply custom tuning values (overrides predefined values). */
+void kf_set_tuning(float q_alt, float q_vel, float r_alt);
 
 
 // ─── Output structure ─────────────────────────────────────────────────────────

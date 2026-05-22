@@ -80,3 +80,13 @@ float bar_get_altitude_agl(void);
 bool bar_read_all(float &temp_c,
                   float &pressure_hpa,
                   float &altitude_m);
+
+// Barometer sampling profiles — choose a profile depending on whether an
+// IMU is present and whether you need maximum smoothing (baro-only).
+typedef enum {
+    BARO_PROFILE_IMU_KALMAN = 0, // faster updates, moderate filter
+    BARO_PROFILE_BARO_ONLY       // maximum oversampling + filtering
+} BaroProfile;
+
+/** Set the BMP280 sampling profile. Safe to call at runtime; applies new sampling. */
+void bar_set_profile(BaroProfile profile);

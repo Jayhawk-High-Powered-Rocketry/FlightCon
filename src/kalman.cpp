@@ -53,6 +53,12 @@
 #include <Arduino.h>
 #include <math.h>
 
+// ─── Runtime tunables (defined here so they can be changed at runtime) ──────
+// Defaults chosen to match the previous "Bench" settings in the header.
+float KF_Q_ALTITUDE = KF_TUNE_PAD_Q_ALT;
+float KF_Q_VELOCITY = KF_TUNE_PAD_Q_VEL;
+float KF_R_ALTITUDE = KF_TUNE_PAD_R_ALT;
+
 // ─── Velocity damping ─────────────────────────────────────────────────────────
 // kVelDecay is applied every predict step.
 //
@@ -270,4 +276,47 @@ void kf_zero_velocity()
 KfState kf_get_state()
 {
     return _last;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime tuning API
+// ---------------------------------------------------------------------------
+
+void kf_set_tuning(float q_alt, float q_vel, float r_alt)
+{
+    if (q_alt >= 0.0f) KF_Q_ALTITUDE = q_alt;
+    if (q_vel >= 0.0f) KF_Q_VELOCITY = q_vel;
+    if (r_alt >= 0.0f) KF_R_ALTITUDE = r_alt;
+    Serial.printf("[KF] Tuning set -> Q_alt=%.6f Q_vel=%.6f R_alt=%.6f\n",
+                  KF_Q_ALTITUDE, KF_Q_VELOCITY, KF_R_ALTITUDE);
+}
+
+void kf_set_phase(KfFlightPhase phase)
+{
+    switch (phase) {
+        case KF_PHASE_PAD:
+            kf_set_tuning(KF_TUNE_PAD_Q_ALT, KF_TUNE_PAD_Q_VEL, KF_TUNE_PAD_R_ALT);
+            break;
+        case KF_PHASE_LIFTOFF:
+            kf_set_tuning(KF_TUNE_LIFTOFF_Q_ALT, KF_TUNE_LIFTOFF_Q_VEL, KF_TUNE_LIFTOFF_R_ALT);
+            break;
+        case KF_PHASE_BOOST:
+            kf_set_tuning(KF_TUNE_BOOST_Q_ALT, KF_TUNE_BOOST_Q_VEL, KF_TUNE_BOOST_R_ALT);
+            break;
+        case KF_PHASE_COAST:
+            kf_set_tuning(KF_TUNE_COAST_Q_ALT, KF_TUNE_COAST_Q_VEL, KF_TUNE_COAST_R_ALT);
+            break;
+        case KF_PHASE_APOGEE:
+            kf_set_tuning(KF_TUNE_APOGEE_Q_ALT, KF_TUNE_APOGEE_Q_VEL, KF_TUNE_APOGEE_R_ALT);
+            break;
+        case KF_PHASE_DESCENT:
+            kf_set_tuning(KF_TUNE_DESCENT_Q_ALT, KF_TUNE_DESCENT_Q_VEL, KF_TUNE_DESCENT_R_ALT);
+            break;
+        case KF_PHASE_LANDING:
+            kf_set_tuning(KF_TUNE_LANDING_Q_ALT, KF_TUNE_LANDING_Q_VEL, KF_TUNE_LANDING_R_ALT);
+            break;
+        default:
+            Serial.println("[KF] Unknown phase in kf_set_phase()");
+            break;
+    }
 }

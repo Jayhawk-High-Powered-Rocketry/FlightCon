@@ -6,6 +6,22 @@
 #include "servo.h"
 #include "kalman.h"
 
+#ifdef ENABLE_OTA
+#include <WiFi.h>
+#include <ArduinoOTA.h>
+#endif
+
+#ifdef ENABLE_OTA // OTA enabled via build flag in platformio.ini
+static bool otaEnabled = false;
+#endif
+
+// README: How to run:
+
+// pio run -t upload
+// -> Get IP Address from console:
+// pio run -t upload --upload-port ADDR (e.g., 192.168.1.50)
+
+
 // ─── Transmit interval ────────────────────────────────────────────────────────
 static constexpr uint32_t kTransmitIntervalMs = 50;   // 20 Hz downlink
 static uint32_t lastTxMs   = 0;
@@ -13,19 +29,19 @@ static uint32_t lastTxMs   = 0;
 // ─── Airbrake config ──────────────────────────────────────────────────────────
 static constexpr int   kServoChannel  = 0;
 static constexpr float kAirbrakeAngle = 45.0f;   // degrees — deployed
-static constexpr float kNeutralAngle  = 0.0f;    // degrees — retracted / safe
+static constexpr float kNeutralAngle  = 8.0f;    // degrees — retracted / safe
 
 // ─── IREC compliance constants ────────────────────────────────────────────────
 
-// 7.4.1.3.2 — 10K flight: airbrakes locked until 2,000 m AGL
-static constexpr float kAltitudeLockoutM = 2000.0f;
+// 7.4.1.3.2 — 10K flight: airbrakes locked until 2,000 m AGL (1,200 m AGL for Test launch)
+static constexpr float kAltitudeLockoutM = 1200.0f;
 
 // 7.3.1 — retract immediately if tilt exceeds 30° from vertical
 static constexpr float kMaxTiltDeg = 30.0f;
 
 // Airbrake deployment altitude (AGL, metres).
 // Set from OpenRocket simulation. Must be above kAltitudeLockoutM.
-static constexpr float kDeployAltM        = 2500.0f;
+static constexpr float kDeployAltM        = 1500.0f; // 2500 m for real -- (1,500 m AGL for Test launch)
 static constexpr float kDeployHysteresisM = 5.0f;
 
 // ─── Liftoff / burnout detection ─────────────────────────────────────────────
@@ -40,7 +56,7 @@ static constexpr float kDeployHysteresisM = 5.0f;
 static constexpr float    kLiftoffAccelMs2   = 20.0f;   // 2G — below BNO055 4G clip limit
 static constexpr float    kLiftoffAltM       = 20.0f;   // metres AGL — baro confirm
 static constexpr float    kBurnoutAccelMs2   = 2.0f;    // near-zero = motor out
-static constexpr uint32_t kBurnoutBackstopMs = 6000;    // 4s burn + 2s margin
+static constexpr uint32_t kBurnoutBackstopMs = 5000;    // REAL 4s burn + 2s margin (test is 3.5s burn + 1.5s margin)
 
 // ─── Landing detection ────────────────────────────────────────────────────────
 // DESCENDING → DESCENDED when velocity stays below threshold for 3 seconds.
@@ -68,7 +84,7 @@ enum class FlightState {
 };
 
 // TODO: change back to FlightState::PAD before flight
-static FlightState state        = FlightState::COAST;
+static FlightState state        = FlightState::PAD;
 static uint32_t    boostStartMs = 0;
 static bool        airbrakeOut  = false;
 static float       lastAltM     = 0.0f;
@@ -134,6 +150,41 @@ static float median5(const float values[5])
     return sorted[2]; // middle value
 }
 
+#ifdef ENABLE_OTA
+static void initOTA()
+{
+    WiFi.mode(WIFI_STA);
+
+    WiFi.begin("Raymann", "Flerds@1!");
+
+    Serial.print("[OTA] Connecting WiFi");
+
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
+        delay(250);
+        Serial.print(".");
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("\n[OTA] WiFi failed — OTA disabled");
+        otaEnabled = false;
+        return;
+    }
+
+    // DHCP-assigned IP (this is what matters now)
+    Serial.printf("\n[OTA] Connected\n");
+    Serial.printf("[OTA] IP address: %s\n", WiFi.localIP().toString().c_str());
+
+    ArduinoOTA.setHostname("esp32-flight");
+    ArduinoOTA.setPassword("Flerds@1!");
+
+    ArduinoOTA.begin();
+    otaEnabled = true;
+
+    Serial.println("[OTA] Ready");
+}
+#endif
+
 // ─── Setup ───────────────────────────────────────────────────────────────────
 
 void setup()
@@ -194,6 +245,8 @@ void setup()
 
     kf_init(initAlt);
     lastKf = {initAlt, 0.0f};
+    // Start in PAD tuning
+    kf_set_phase(KF_PHASE_PAD);
     for (int i = 0; i < 5; i++) {
         baroBuffer[i] = initAlt;
     }
@@ -201,6 +254,10 @@ void setup()
 
     lastBaroMs   = millis();
     lastKalmanMs = millis();
+
+    #ifdef ENABLE_OTA
+    initOTA();
+    #endif
 
     Serial.println("[MAIN] System ready.");
 }
@@ -210,6 +267,10 @@ void setup()
 void loop()
 {
     transmitterPoll();
+
+    #ifdef ENABLE_OTA
+    if (otaEnabled) ArduinoOTA.handle();
+    #endif
 
     uint32_t now = millis();
 
@@ -234,18 +295,18 @@ void loop()
             // IMU accel disabled until board is permanently mounted in rocket
             // and verified in that orientation. Bench accel noise causes
             // Kalman velocity explosion. Re-enable for flight:
-            //   float accelInput = imuOk ? imu.accel_y : 0.0f;
-            float accelInput = 0.0f; // TODO: Replace me back
+            float accelInput = imuOk ? imu.accel_y : 0.0f;
+            // float accelInput = 0.0f; // TODO: Replace me back
 
             // TODO: Replace back deadband
-            // if (imuOk && state != FlightState::PAD && state != FlightState::DESCENDED) {
-            //     accelInput = imu.accel_y;
+            if (imuOk && state != FlightState::PAD && state != FlightState::DESCENDED) {
+                accelInput = imu.accel_y;
 
-            //     // Kill tiny bias/noise near zero
-            //     if (fabsf(accelInput) < 0.25f) {
-            //         accelInput = 0.0f;
-            //     }
-            // }
+                // Kill tiny bias/noise near zero
+                if (fabsf(accelInput) < 0.25f) {
+                    accelInput = 0.0f;
+                }
+            }
 
 
             baroBuffer[baroIdx] = baroAlt;
@@ -284,6 +345,8 @@ void loop()
                 if (accelTriggered && baroTriggered) {
                     state        = FlightState::BOOST;
                     boostStartMs = millis();
+                    // Switch Kalman to boost tuning
+                    kf_set_phase(KF_PHASE_BOOST);
                     Serial.printf("[SM] PAD -> BOOST (accel_y=%.1f m/s2 alt=%.1fm vel=%.1fm/s)\n",
                                   imu.accel_y, lastKf.altitude_m, lastKf.velocity_ms);
                 }
@@ -300,6 +363,8 @@ void loop()
 
                 if (accelBurnout || timerBurnout) {
                     state = FlightState::COAST;
+                    // Enter COAST tuning
+                    kf_set_phase(KF_PHASE_COAST);
                     Serial.printf("[SM] BOOST -> COAST (%s at %lums alt=%.1fm vel=%.1fm/s)\n",
                                   accelBurnout ? "accel" : "timer",
                                   (unsigned long)burnElapsedMs,
@@ -349,6 +414,8 @@ void loop()
                     if (millis() - apogeeConditionStartMs >= kApogeeConfirmMs) {
                         retractAirbrakes("apogee reached");
                         state = FlightState::DESCENDING;
+                        // Enter descent tuning
+                        kf_set_phase(KF_PHASE_DESCENT);
                         apogeeConditionStartMs = 0;
 
                         Serial.printf("[SM] COAST -> DESCENDING after 3s confirmation (alt=%.1fm vel=%.1fm/s)\n",
@@ -368,7 +435,7 @@ void loop()
         // ── DESCENDING: falling after apogee ──────────────────────────────────
         // Airbrakes retracted. Waiting for landing detection.
         case FlightState::DESCENDING:
-            retractAirbrakes("DESCENDING");
+                    retractAirbrakes("DESCENDING");
             {
                 float absVel = fabsf(lastKf.velocity_ms);
 
@@ -379,6 +446,8 @@ void loop()
                         landedTimerRunning = true;
                     } else if ((millis() - landedTimerStart) >= kLandedConfirmMs) {
                         state              = FlightState::DESCENDED;
+                        // Set landing/ground tuning on confirmed touchdown
+                        kf_set_phase(KF_PHASE_LANDING);
                         landedTimerRunning = false;
                         Serial.printf("[SM] DESCENDING -> DESCENDED (alt=%.1fm vel=%.1fm/s)\n",
                                       lastKf.altitude_m, lastKf.velocity_ms);
