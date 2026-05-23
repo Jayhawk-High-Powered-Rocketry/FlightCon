@@ -9,10 +9,12 @@
 #ifdef ENABLE_OTA
 #include <WiFi.h>
 #include <ArduinoOTA.h>
+#include "wifi_credentials.h"
 #endif
 
 #ifdef ENABLE_OTA // OTA enabled via build flag in platformio.ini
 static bool otaEnabled = false;
+static uint32_t otaStartMs = 0;
 #endif
 
 // README: How to run:
@@ -24,6 +26,7 @@ static bool otaEnabled = false;
 
 // ─── Transmit interval ────────────────────────────────────────────────────────
 static constexpr uint32_t kTransmitIntervalMs = 50;   // 20 Hz downlink
+static constexpr uint32_t kCommandRxWindowMs  = 12;   // brief RX dwell for uplink command checks
 static uint32_t lastTxMs   = 0;
 
 // ─── Airbrake config ──────────────────────────────────────────────────────────
@@ -34,6 +37,7 @@ static constexpr float kNeutralAngle  = 8.0f;    // degrees — retracted / safe
 // ─── IREC compliance constants ────────────────────────────────────────────────
 
 // 7.4.1.3.2 — 10K flight: airbrakes locked until 2,000 m AGL (1,200 m AGL for Test launch)
+//TODO change back after done testing - 1200.0f
 static constexpr float kAltitudeLockoutM = 1200.0f;
 
 // 7.3.1 — retract immediately if tilt exceeds 30° from vertical
@@ -73,6 +77,10 @@ static constexpr uint32_t kBaroPeriodMs = 25;
 static uint32_t lastBaroMs   = 0;
 static uint32_t lastKalmanMs = 0;
 
+#ifdef ENABLE_OTA
+static constexpr uint32_t kWifiActiveWindowMs = 2UL * 60UL * 1000UL;
+#endif
+
 // ─── Flight state machine ─────────────────────────────────────────────────────
 
 enum class FlightState {
@@ -83,10 +91,11 @@ enum class FlightState {
     DESCENDED    // On the ground. Flight over. Velocity forced to zero (ZUPT).
 };
 
-// TODO: change back to FlightState::PAD before flight
+// TODO: change back to FlightState::PAD before flight testing
 static FlightState state        = FlightState::PAD;
 static uint32_t    boostStartMs = 0;
 static bool        airbrakeOut  = false;
+static bool        commandDeployRequested = false;
 static float       lastAltM     = 0.0f;
 static uint32_t apogeeConditionStartMs = 0;
 static constexpr uint32_t kApogeeConfirmMs = 2000; // 3 seconds
@@ -151,35 +160,48 @@ static float median5(const float values[5])
 }
 
 #ifdef ENABLE_OTA
-static void initOTA()
+static void shutdownOTA()
 {
-    WiFi.mode(WIFI_STA);
-
-    WiFi.begin("Raymann", "Flerds@1!");
-
-    Serial.print("[OTA] Connecting WiFi");
-
-    uint32_t start = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - start < 30000) {
-        delay(250);
-        Serial.print(".");
+    if (!otaEnabled) {
+        return;
     }
 
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("\n[OTA] WiFi failed — OTA disabled");
+    Serial.println("[OTA] WiFi window expired — shutting wifi down");
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    otaEnabled = false;
+}
+
+static void initOTA()
+{
+    WiFi.mode(WIFI_AP);
+
+    IPAddress apIp(192, 168, 4, 1);
+    IPAddress apGateway(192, 168, 4, 1);
+    IPAddress apSubnet(255, 255, 255, 0);
+
+    if (!WiFi.softAPConfig(apIp, apGateway, apSubnet)) {
+        Serial.println("[OTA] softAPConfig failed — OTA disabled");
         otaEnabled = false;
         return;
     }
 
-    // DHCP-assigned IP (this is what matters now)
-    Serial.printf("\n[OTA] Connected\n");
-    Serial.printf("[OTA] IP address: %s\n", WiFi.localIP().toString().c_str());
+    if (!WiFi.softAP(WIFI_AP_SSID, WIFI_AP_PASSWORD)) {
+        Serial.println("[OTA] softAP start failed — OTA disabled");
+        otaEnabled = false;
+        return;
+    }
+
+    Serial.println("[OTA] Access point started");
+    Serial.printf("[OTA] SSID: %s\n", WIFI_AP_SSID);
+    Serial.printf("[OTA] IP address: %s\n", WiFi.softAPIP().toString().c_str());
 
     ArduinoOTA.setHostname("esp32-flight");
-    ArduinoOTA.setPassword("Flerds@1!");
+    ArduinoOTA.setPassword(WIFI_AP_PASSWORD);
 
     ArduinoOTA.begin();
     otaEnabled = true;
+    otaStartMs = millis();
 
     Serial.println("[OTA] Ready");
 }
@@ -269,7 +291,13 @@ void loop()
     transmitterPoll();
 
     #ifdef ENABLE_OTA
-    if (otaEnabled) ArduinoOTA.handle();
+    if (otaEnabled) {
+        if (millis() - otaStartMs >= kWifiActiveWindowMs) {
+            shutdownOTA();
+        } else {
+            ArduinoOTA.handle();
+        }
+    }
     #endif
 
     uint32_t now = millis();
@@ -388,13 +416,20 @@ void loop()
                 // Condition 3 — deployment altitude reached
                 bool deployOk = (altNow >= kDeployAltM);
 
+                // Ground-station deploy request (latched from RX window)
+                bool commandOk = commandDeployRequested;
+
                 // 7.3.1 — tilt exceeded: retract IMMEDIATELY
                 if (imuOk && imu.tilt_deg > kMaxTiltDeg) {
                     retractAirbrakes("tilt > 30deg");
                 }
-                // All three conditions met — deploy
-                else if (altOk && tiltOk && deployOk && !airbrakeOut) {
+                // Deploy from automatic threshold or explicit ground command
+                else if (altOk && tiltOk && (deployOk || commandOk) && !airbrakeOut) {
                     deployAirbrakes();
+                    if (commandOk) {
+                        commandDeployRequested = false;
+                        Serial.println("[CTRL] Ground deploy command accepted");
+                    }
                 }
                 // Hysteresis retract
                 else if (airbrakeOut && altNow <= (kDeployAltM - kDeployHysteresisM)) {
@@ -501,4 +536,13 @@ void loop()
     payload += ", Airbrake: "+ String(airbrakeOut ? 1 : 0);
 
     transmitterSend(payload);
+
+    if (transmitterReceiveDeployCommandWindow(kCommandRxWindowMs)) {
+        if (state == FlightState::COAST) {
+            commandDeployRequested = true;
+            Serial.println("[CTRL] Ground deploy command latched");
+        } else {
+            Serial.printf("[CTRL] Ground deploy command ignored in %s\n", stateLabel(state));
+        }
+    }
 }

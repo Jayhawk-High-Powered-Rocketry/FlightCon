@@ -37,9 +37,15 @@ static constexpr int kImuSclPin = 26;
 // I2C address — 0x28 default, 0x29 if ADD pin is high
 static constexpr uint8_t kBno055Address = 0x29;
 
-// External 32.768 kHz crystal improves accuracy.
-// Set false if your module does not have one.
-static constexpr bool kUseExternalCrystal = true;
+// External 32.768 kHz crystal improves accuracy if the module actually has one.
+// Leave disabled for clone boards that do not populate it.
+static constexpr bool kUseExternalCrystal = false;
+static constexpr uint32_t kImuI2cClockHz = 100000;
+
+// Keep debug logging from overwhelming the UART when imuRead() runs fast.
+static constexpr uint32_t kImuDebugPrintPeriodMs = 500;
+static constexpr uint32_t kImuZeroStallMs = 1500;
+static constexpr float kImuZeroEpsilon = 0.05f;
 
 // ─── Axis mapping ─────────────────────────────────────────────────────────────
 // Mount the BNO055 so sensor Y points toward the rocket nose.
@@ -67,6 +73,49 @@ static constexpr int      kCalAddr    = 4;
 static Adafruit_BNO055 bno = Adafruit_BNO055(55, kBno055Address, &Wire);
 static bool _ready    = false;
 static bool _calSaved = false;   // true once we've saved this session
+static uint32_t _lastDebugPrintMs = 0;
+static bool _haveLastGoodOrientation = false;
+static float _lastGoodYaw = 0.0f;
+static float _lastGoodPitch = 0.0f;
+static float _lastGoodRoll = 0.0f;
+
+static void _recoverI2cBus()
+{
+    Wire.end();
+    delay(10);
+
+    pinMode(kImuSdaPin, INPUT_PULLUP);
+    pinMode(kImuSclPin, INPUT_PULLUP);
+    delay(2);
+
+    if (digitalRead(kImuSdaPin) == LOW) {
+        pinMode(kImuSclPin, OUTPUT_OPEN_DRAIN);
+        digitalWrite(kImuSclPin, HIGH);
+        for (int i = 0; i < 9; ++i) {
+            digitalWrite(kImuSclPin, LOW);
+            delayMicroseconds(5);
+            digitalWrite(kImuSclPin, HIGH);
+            delayMicroseconds(5);
+        }
+    }
+
+    pinMode(kImuSdaPin, OUTPUT_OPEN_DRAIN);
+    digitalWrite(kImuSdaPin, LOW);
+    delayMicroseconds(5);
+    pinMode(kImuSclPin, INPUT_PULLUP);
+    delayMicroseconds(5);
+    pinMode(kImuSdaPin, INPUT_PULLUP);
+    delay(2);
+
+    Wire.begin(kImuSdaPin, kImuSclPin);
+    Wire.setClock(kImuI2cClockHz);
+    delay(10);
+}
+
+static void _resetImuBus()
+{
+    _recoverI2cBus();
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -100,6 +149,76 @@ static void _printCalibration()
     bno.getCalibration(&sys, &gyro, &accel, &mag);
     Serial.printf("[IMU] Cal: SYS=%u GYRO=%u ACCEL=%u (MAG=%u ignored)\n",
                   sys, gyro, accel, mag);
+}
+
+static bool _readOrientationFromQuat(ImuSample& sample)
+{
+    imu::Quaternion q = bno.getQuat();
+    double mag = q.magnitude();
+    if (!isfinite(mag) || mag < 1.0e-6) {
+        return false;
+    }
+
+    q.normalize();
+
+    // Axis convention fix adapted from the BNO055 quaternion->Euler workaround.
+    // This keeps the output aligned with the rocket-frame logs used elsewhere.
+    float temp = q.x();
+    q.x() = -q.y();
+    q.y() = temp;
+    q.z() = -q.z();
+
+    imu::Vector<3> euler = q.toEuler();
+    sample.yaw   = -euler.z() * RAD_TO_DEG;
+    sample.roll  = -euler.x() * RAD_TO_DEG;
+    sample.pitch = -euler.y() * RAD_TO_DEG;
+    return true;
+}
+
+static void _readOrientationFromEuler(ImuSample& sample)
+{
+    // BNO055 VECTOR_EULER in IMUPLUS mode:
+    //   x = heading / yaw  (0-360 deg)
+    //   y = roll           (+-180 deg)
+    //   z = pitch          (+-90 deg)
+    imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
+    sample.yaw   = euler.x();
+    sample.roll  = euler.y();
+    sample.pitch = euler.z();
+}
+
+static void _readImuIntoSample(ImuSample& sample)
+{
+    bool orientationOk = _readOrientationFromQuat(sample);
+    if (!orientationOk) {
+        delay(2);
+        orientationOk = _readOrientationFromQuat(sample);
+    }
+
+    if (!orientationOk && _haveLastGoodOrientation) {
+        // Quaternion failed twice: fall back to the chip's Euler output.
+        _readOrientationFromEuler(sample);
+        Serial.println("[IMU] Quaternion read failed; using Euler fallback.");
+    }
+
+    if (!orientationOk && !_haveLastGoodOrientation) {
+        _readOrientationFromEuler(sample);
+    }
+
+    if (orientationOk) {
+        _lastGoodYaw = sample.yaw;
+        _lastGoodPitch = sample.pitch;
+        _lastGoodRoll = sample.roll;
+        _haveLastGoodOrientation = true;
+    }
+
+    // VECTOR_LINEARACCEL gives m/s^2 with gravity subtracted.
+    imu::Vector<3> linAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
+    sample.accel_x = kRocketAxisXSign * _axisValue(linAccel, kRocketAxisX);
+    sample.accel_y = kRocketAxisYSign * _axisValue(linAccel, kRocketAxisY);
+    sample.accel_z = kRocketAxisZSign * _axisValue(linAccel, kRocketAxisZ);
+
+    sample.tilt_deg = _compute_tilt(sample.pitch, sample.roll);
 }
 
 /**
@@ -152,13 +271,21 @@ static void _saveCalibration()
 
 bool imuInit()
 {
-    Wire.begin(kImuSdaPin, kImuSclPin);
-    Wire.setClock(400000);
+    _resetImuBus();
     delay(100);
 
     // IMUPLUS mode: accel + gyro fusion only, magnetometer disabled.
     // This avoids mag interference from the rocket airframe and motor.
-    if (!bno.begin(OPERATION_MODE_IMUPLUS)) {
+    bool began = false;
+    for (int attempt = 0; attempt < 3 && !began; ++attempt) {
+        began = bno.begin(OPERATION_MODE_IMUPLUS);
+        if (!began) {
+            _resetImuBus();
+            delay(50);
+        }
+    }
+
+    if (!began) {
         Serial.println("[IMU] BNO055 not detected. Check wiring:");
         Serial.printf ("[IMU]   VCC->3.3V | GND->GND | SDA->GPIO%d | SCL->GPIO%d\n",
                        kImuSdaPin, kImuSclPin);
@@ -200,26 +327,7 @@ bool imuRead(ImuSample &sample)
 {
     if (!_ready) return false;
 
-    // ── Euler angles ──────────────────────────────────────────────────────────
-    // BNO055 VECTOR_EULER in IMUPLUS mode:
-    //   x = heading / yaw  (0-360 deg)
-    //   y = roll           (+-180 deg)
-    //   z = pitch          (+-90 deg)
-    imu::Vector<3> euler = bno.getVector(Adafruit_BNO055::VECTOR_EULER);
-    sample.yaw   = euler.x();
-    sample.roll  = euler.y();
-    sample.pitch = euler.z();
-
-    // ── Linear acceleration (gravity removed on-chip) ─────────────────────────
-    // VECTOR_LINEARACCEL gives m/s^2 with gravity subtracted.
-    // At rest all axes should read ~0 m/s^2.
-    imu::Vector<3> linAccel = bno.getVector(Adafruit_BNO055::VECTOR_LINEARACCEL);
-    sample.accel_x = kRocketAxisXSign * _axisValue(linAccel, kRocketAxisX);
-    sample.accel_y = kRocketAxisYSign * _axisValue(linAccel, kRocketAxisY);
-    sample.accel_z = kRocketAxisZSign * _axisValue(linAccel, kRocketAxisZ);
-
-    // ── Tilt from vertical ────────────────────────────────────────────────────
-    sample.tilt_deg = _compute_tilt(sample.pitch, sample.roll);
+    _readImuIntoSample(sample);
 
     // ── Auto-save calibration ─────────────────────────────────────────────────
     // Check every read, save once per session when fully calibrated.
@@ -232,8 +340,12 @@ bool imuRead(ImuSample &sample)
     // Serial.printf("[IMU-CAL] SYS=%u GYRO=%u ACCEL=%u MAG=%u | calSaved=%d\n",
     //               sys, gyro, accel, mag, _calSaved ? 1 : 0);
     // }
-    Serial.printf("[IMU-EULER] Yaw=%.1f Pitch=%.1f Roll=%.1f\n", 
-              sample.yaw, sample.pitch, sample.roll);
+    uint32_t now = millis();
+    if (now - _lastDebugPrintMs >= kImuDebugPrintPeriodMs) {
+        _lastDebugPrintMs = now;
+        Serial.printf("[IMU-EULER] Yaw=%.1f Pitch=%.1f Roll=%.1f\n",
+                      sample.yaw, sample.pitch, sample.roll);
+    }
 
     if (!_calSaved) {
         uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
