@@ -63,15 +63,15 @@ void bar_set_profile(BaroProfile profile)
 {
     switch (profile) {
         case BARO_PROFILE_IMU_KALMAN:
-            // Faster updates, moderate filtering — Kalman + IMU handle noise
+            // Fastest response — let the Kalman stage handle the remaining smoothing.
             _bmp.setSampling(
                 Adafruit_BMP280::MODE_NORMAL,
                 Adafruit_BMP280::SAMPLING_X2,   // temperature
-                Adafruit_BMP280::SAMPLING_X8,   // pressure (rate/noise trade)
-                Adafruit_BMP280::FILTER_X8,
-                Adafruit_BMP280::STANDBY_MS_63
+                Adafruit_BMP280::SAMPLING_X2,   // pressure
+                Adafruit_BMP280::FILTER_OFF,
+                Adafruit_BMP280::STANDBY_MS_1
             );
-            Serial.println("[BAR] Profile: IMU+Kalman (X8 pressure, FILTER_X8, STANDBY_MS_63)");
+            Serial.println("[BAR] Profile: IMU+Kalman (X2 pressure, FILTER_OFF, STANDBY_MS_1)");
             break;
 
         case BARO_PROFILE_BARO_ONLY:

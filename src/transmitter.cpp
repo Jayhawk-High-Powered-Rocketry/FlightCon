@@ -22,6 +22,107 @@ bool sendATCommand(String command, uint32_t timeoutMs = 1000);
 bool sendMessage(int address, String message);
 void checkForMessages();
 
+static String sRxLine;
+static bool sDeployCommandPending = false;
+
+static bool isDeployCommand(const String& payload)
+{
+  String cmd = payload;
+  cmd.trim();
+  cmd.toUpperCase();
+  return cmd == "DEPLOY_AIRBRAKE" || cmd == "DEPLOY" || cmd == "AIRBRAKE_DEPLOY";
+}
+
+static bool parseRcvFrame(const String& frame, String& senderAddress, String& messageData, String& rssi, String& snr)
+{
+  if (!frame.startsWith("+RCV=")) {
+    return false;
+  }
+
+  int firstComma = frame.indexOf(',');
+  int secondComma = frame.indexOf(',', firstComma + 1);
+  int thirdComma = frame.indexOf(',', secondComma + 1);
+  int fourthComma = frame.indexOf(',', thirdComma + 1);
+
+  if (firstComma <= 0 || secondComma <= 0 || thirdComma <= 0 || fourthComma <= 0) {
+    return false;
+  }
+
+  senderAddress = frame.substring(5, firstComma);
+  messageData = frame.substring(secondComma + 1, thirdComma);
+  rssi = frame.substring(thirdComma + 1, fourthComma);
+  snr = frame.substring(fourthComma + 1);
+  senderAddress.trim();
+  messageData.trim();
+  rssi.trim();
+  snr.trim();
+  return true;
+}
+
+static void handleIncomingLine(const String& line)
+{
+  if (line.length() == 0) {
+    return;
+  }
+
+  String senderAddress;
+  String messageData;
+  String rssi;
+  String snr;
+
+  if (!parseRcvFrame(line, senderAddress, messageData, rssi, snr)) {
+    return;
+  }
+
+  Serial.println("Received message: " + line);
+  Serial.println("From: " + senderAddress);
+  Serial.println("Message: " + messageData);
+  Serial.println("RSSI: " + rssi + " dBm");
+  Serial.println("SNR: " + snr + " dB");
+
+  if (isDeployCommand(messageData)) {
+    sDeployCommandPending = true;
+    Serial.println("[RXCMD] Deploy airbrake command detected");
+  }
+}
+
+static void pumpIncoming(uint32_t budgetMs)
+{
+  uint32_t startMs = millis();
+
+  while (true) {
+    bool consumedAny = false;
+    while (loraSerial.available() > 0) {
+      consumedAny = true;
+      char c = static_cast<char>(loraSerial.read());
+
+      if (c == '\r') {
+        continue;
+      }
+
+      if (c == '\n') {
+        sRxLine.trim();
+        handleIncomingLine(sRxLine);
+        sRxLine = "";
+      } else {
+        sRxLine += c;
+      }
+    }
+
+    if (budgetMs == 0) {
+      break;
+    }
+
+    if (millis() - startMs >= budgetMs) {
+      break;
+    }
+
+    if (!consumedAny) {
+      delay(1);
+    }
+  }
+}
+
 bool transmitterInit() {
   Serial.println("ESP32 WROVER-E LoRa Transmitter Starting...");
 
@@ -89,7 +190,18 @@ bool transmitterSend(const String &payload) {
 }
 
 void transmitterPoll() {
-  checkForMessages();
+  pumpIncoming(0);
+}
+
+bool transmitterReceiveDeployCommandWindow(uint32_t windowMs) {
+  pumpIncoming(windowMs);
+
+  if (!sDeployCommandPending) {
+    return false;
+  }
+
+  sDeployCommandPending = false;
+  return true;
 }
 
 String readModuleResponse(uint32_t timeoutMs) {
@@ -150,37 +262,7 @@ bool sendMessage(int address, String message) {
 }
 
 void checkForMessages() {
-  // Check if there are any incoming messages
-  if (loraSerial.available()) {
-    String incoming = loraSerial.readString();
-    incoming.trim();
-    
-    // Parse incoming message format: +RCV=[Address],[Length],[Data],[RSSI],[SNR]
-    if (incoming.startsWith("+RCV=")) {
-      Serial.println("Received message: " + incoming);
-      
-      // Extract message components
-      int firstComma = incoming.indexOf(',');
-      int secondComma = incoming.indexOf(',', firstComma + 1);
-      int thirdComma = incoming.indexOf(',', secondComma + 1);
-      int fourthComma = incoming.indexOf(',', thirdComma + 1);
-      
-      if (firstComma > 0 && secondComma > 0 && thirdComma > 0 && fourthComma > 0) {
-        String senderAddress = incoming.substring(5, firstComma);
-        String messageLength = incoming.substring(firstComma + 1, secondComma);
-        String messageData = incoming.substring(secondComma + 1, thirdComma);
-        String rssi = incoming.substring(thirdComma + 1, fourthComma);
-        String snr = incoming.substring(fourthComma + 1);
-        
-        Serial.println("From: " + senderAddress);
-        Serial.println("Message: " + messageData);
-        Serial.println("RSSI: " + rssi + " dBm");
-        Serial.println("SNR: " + snr + " dB");
-      } else {
-        Serial.println("Received unparseable message: " + incoming);
-      }
-    }
-  }
+  pumpIncoming(0);
 }
 
 // Optional: Function to put ESP32 into deep sleep to save power
