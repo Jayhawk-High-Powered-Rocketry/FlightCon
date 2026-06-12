@@ -20,6 +20,7 @@
  */
 
 #include "imu.h"
+#include "verbose.h"
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -147,8 +148,8 @@ static void _printCalibration()
 {
     uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
     bno.getCalibration(&sys, &gyro, &accel, &mag);
-    Serial.printf("[IMU] Cal: SYS=%u GYRO=%u ACCEL=%u (MAG=%u ignored)\n",
-                  sys, gyro, accel, mag);
+    VLOGF("[IMU] Cal: SYS=%u GYRO=%u ACCEL=%u (MAG=%u ignored)\n",
+          sys, gyro, accel, mag);
 }
 
 static bool _readOrientationFromQuat(ImuSample& sample)
@@ -198,7 +199,7 @@ static void _readImuIntoSample(ImuSample& sample)
     if (!orientationOk && _haveLastGoodOrientation) {
         // Quaternion failed twice: fall back to the chip's Euler output.
         _readOrientationFromEuler(sample);
-        Serial.println("[IMU] Quaternion read failed; using Euler fallback.");
+        VLOG("[IMU] Quaternion read failed; using Euler fallback.");
     }
 
     if (!orientationOk && !_haveLastGoodOrientation) {
@@ -234,7 +235,7 @@ static bool _loadCalibration()
     EEPROM.get(kMagicAddr, magic);
 
     if (magic != kCalMagic) {
-        Serial.println("[IMU] No saved calibration in flash — will calibrate fresh.");
+        VLOG("[IMU] No saved calibration in flash — will calibrate fresh.");
         EEPROM.end();
         return false;
     }
@@ -244,7 +245,7 @@ static bool _loadCalibration()
     EEPROM.end();
 
     bno.setSensorOffsets(offsets);
-    Serial.println("[IMU] Loaded calibration offsets from flash.");
+    VLOG("[IMU] Loaded calibration offsets from flash.");
     return true;
 }
 
@@ -264,7 +265,7 @@ static void _saveCalibration()
     EEPROM.end();
 
     _calSaved = true;
-    Serial.println("[IMU] Calibration saved to flash — loads automatically on next boot.");
+    Serial.println("[IMU] Calibration saved to flash.");
 }
 
 // ─── Public implementation ────────────────────────────────────────────────────
@@ -304,17 +305,17 @@ bool imuInit()
 
     _ready = true;
 
-    Serial.printf("[IMU] BNO055 ready — IMUPLUS (accel+gyro, no mag)\n");
-    Serial.printf("[IMU] Address=0x%02X SDA=GPIO%d SCL=GPIO%d\n",
-                  kBno055Address, kImuSdaPin, kImuSclPin);
+    VLOGF("[IMU] BNO055 ready — IMUPLUS (accel+gyro, no mag)\n");
+    VLOGF("[IMU] Address=0x%02X SDA=GPIO%d SCL=GPIO%d\n",
+          kBno055Address, kImuSdaPin, kImuSclPin);
 
     if (calLoaded) {
-        Serial.println("[IMU] Saved offsets loaded — calibration should be fast.");
+        VLOG("[IMU] Saved offsets loaded — calibration should be fast.");
     } else {
-        Serial.println("[IMU] No saved offsets. To calibrate:");
-        Serial.println("[IMU]   GYRO:  leave still for a few seconds");
-        Serial.println("[IMU]   ACCEL: place board on each of its 6 faces briefly");
-        Serial.println("[IMU]   Auto-saves when SYS+GYRO+ACCEL all reach 3.");
+        VLOG("[IMU] No saved offsets. To calibrate:");
+        VLOG("[IMU]   GYRO:  leave still for a few seconds");
+        VLOG("[IMU]   ACCEL: place board on each of its 6 faces briefly");
+        VLOG("[IMU]   Auto-saves when SYS+GYRO+ACCEL all reach 3.");
     }
 
     _printCalibration();
@@ -343,15 +344,15 @@ bool imuRead(ImuSample &sample)
     uint32_t now = millis();
     if (now - _lastDebugPrintMs >= kImuDebugPrintPeriodMs) {
         _lastDebugPrintMs = now;
-        Serial.printf("[IMU-EULER] Yaw=%.1f Pitch=%.1f Roll=%.1f\n",
-                      sample.yaw, sample.pitch, sample.roll);
+        VLOGF("[IMU-EULER] Yaw=%.1f Pitch=%.1f Roll=%.1f\n",
+              sample.yaw, sample.pitch, sample.roll);
     }
 
     if (!_calSaved) {
         uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
         bno.getCalibration(&sys, &gyro, &accel, &mag);
         if (gyro == 3 && accel == 3) {
-            Serial.println("[IMU] Fully calibrated (SYS=3 GYRO=3 ACCEL=3) — saving.");
+            Serial.println("[IMU] Fully calibrated — saving.");
             _saveCalibration();
             _printCalibration();
         }

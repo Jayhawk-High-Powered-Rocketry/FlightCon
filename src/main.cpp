@@ -5,6 +5,8 @@
 #include "bar.h"
 #include "servo.h"
 #include "kalman.h"
+#include "telemetry.h"
+#include "verbose.h"
 
 #ifdef ENABLE_OTA
 #include <WiFi.h>
@@ -166,7 +168,7 @@ static void shutdownOTA()
         return;
     }
 
-    Serial.println("[OTA] WiFi window expired — shutting wifi down");
+    VLOG("[OTA] WiFi window expired — shutting wifi down");
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
     otaEnabled = false;
@@ -192,9 +194,9 @@ static void initOTA()
         return;
     }
 
-    Serial.println("[OTA] Access point started");
-    Serial.printf("[OTA] SSID: %s\n", WIFI_AP_SSID);
-    Serial.printf("[OTA] IP address: %s\n", WiFi.softAPIP().toString().c_str());
+    VLOG("[OTA] Access point started");
+    VLOGF("[OTA] SSID: %s\n", WIFI_AP_SSID);
+    VLOGF("[OTA] IP address: %s\n", WiFi.softAPIP().toString().c_str());
 
     ArduinoOTA.setHostname("esp32-flight");
     ArduinoOTA.setPassword(WIFI_AP_PASSWORD);
@@ -203,7 +205,7 @@ static void initOTA()
     otaEnabled = true;
     otaStartMs = millis();
 
-    Serial.println("[OTA] Ready");
+    VLOG("[OTA] Ready");
 }
 #endif
 
@@ -249,7 +251,7 @@ void setup()
     // ── Kalman init ───────────────────────────────────────────────────────────
     // Average 20 baro readings after calibration settles.
     // Fixes the 2-3m ground offset from single noisy sample.
-    Serial.println("[MAIN] Settling baro for Kalman init...");
+    VLOG("[MAIN] Settling baro for Kalman init...");
     delay(500);
     double initSum   = 0.0;
     int    initCount = 0;
@@ -262,8 +264,8 @@ void setup()
         delay(25);
     }
     float initAlt = (initCount > 0) ? (float)(initSum / initCount) : 0.0f;
-    Serial.printf("[MAIN] Kalman init altitude: %.2f m (%d samples)\n",
-                  initAlt, initCount);
+    VLOGF("[MAIN] Kalman init altitude: %.2f m (%d samples)\n",
+          initAlt, initCount);
 
     kf_init(initAlt);
     lastKf = {initAlt, 0.0f};
@@ -453,13 +455,13 @@ void loop()
                         kf_set_phase(KF_PHASE_DESCENT);
                         apogeeConditionStartMs = 0;
 
-                        Serial.printf("[SM] COAST -> DESCENDING after 3s confirmation (alt=%.1fm vel=%.1fm/s)\n",
+                        Serial.printf("[SM] COAST -> DESCENDING (alt=%.1fm vel=%.1fm/s)\n",
                                     lastKf.altitude_m, lastKf.velocity_ms);
                     }
                 } else {
                     // Reset timer if the condition breaks even once
                     if (apogeeConditionStartMs != 0) {
-                        Serial.println("[SM] Apogee condition lost — confirmation timer reset");
+                        VLOG("[SM] Apogee condition lost — confirmation timer reset");
                     }
 
                     apogeeConditionStartMs = 0;
@@ -505,7 +507,7 @@ void loop()
     if (barOk) lastAltM = lastKf.altitude_m;
 
     // ── Serial debug ──────────────────────────────────────────────────────────
-    Serial.printf(
+    VLOGF(
         "[DATA] %-11s | AltKF=%6.1fm BaroAlt=%6.1fm | VelKF=%6.3fm/s | "
         "AccY=%6.2f Tilt=%5.1f° | Brake=%d\n",
         stateLabel(state),
@@ -521,19 +523,21 @@ void loop()
     if (now - lastTxMs < kTransmitIntervalMs) return;
     lastTxMs = now;
 
-    String payload;
-    payload.reserve(160);
-    payload += "State: "     + String(stateLabel(state));
-    payload += ", AltKF: "   + String(lastKf.altitude_m,  2);
-    payload += ", VelKF: "   + String(lastKf.velocity_ms, 2);
-    payload += ", BaroAlt: " + String(barOk  ? baroAlt       : -999.0f, 2);
-    payload += ", AccY: "    + String(imuOk  ? imu.accel_y   : -999.0f, 2);
-    payload += ", Tilt: "    + String(imuOk  ? imu.tilt_deg  : -999.0f, 2);
-    payload += ", Roll: "    + String(imuOk  ? imu.roll      : -999.0f, 2);
-    payload += ", Pitch: "   + String(imuOk  ? imu.pitch     : -999.0f, 2);
-    payload += ", Yaw: "     + String(imuOk  ? imu.yaw       : -999.0f, 2);
-    payload += ", Temp: "    + String(barOk  ? temp          : -999.0f, 2);
-    payload += ", Airbrake: "+ String(airbrakeOut ? 1 : 0);
+    String payload = telem_pack_hex(
+        static_cast<uint8_t>(state),
+        airbrakeOut,
+        barOk,
+        imuOk,
+        lastKf.altitude_m,
+        lastKf.velocity_ms,
+        barOk  ? baroAlt      : 0.0f,
+        imuOk  ? imu.accel_y  : 0.0f,
+        imuOk  ? imu.tilt_deg : 0.0f,
+        imuOk  ? imu.roll     : 0.0f,
+        imuOk  ? imu.pitch    : 0.0f,
+        imuOk  ? imu.yaw      : 0.0f,
+        barOk  ? temp         : 0.0f
+    );
 
     transmitterSend(payload);
 
@@ -546,3 +550,9 @@ void loop()
         }
     }
 }
+
+/*
+    
+
+    
+ */

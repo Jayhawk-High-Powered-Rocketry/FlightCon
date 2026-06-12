@@ -2,6 +2,7 @@
 // Hardware Serial2 is used for LoRa communication
 #include <Arduino.h>
 #include "transmitter.h"
+#include "verbose.h"
 HardwareSerial loraSerial(2);
 
 // Pin definitions for ESP32 WROVER-E
@@ -74,11 +75,11 @@ static void handleIncomingLine(const String& line)
     return;
   }
 
-  Serial.println("Received message: " + line);
-  Serial.println("From: " + senderAddress);
-  Serial.println("Message: " + messageData);
-  Serial.println("RSSI: " + rssi + " dBm");
-  Serial.println("SNR: " + snr + " dB");
+  VLOG("Received message: " + line);
+  VLOG("From: " + senderAddress);
+  VLOG("Message: " + messageData);
+  VLOG("RSSI: " + rssi + " dBm");
+  VLOG("SNR: " + snr + " dB");
 
   if (isDeployCommand(messageData)) {
     sDeployCommandPending = true;
@@ -124,7 +125,7 @@ static void pumpIncoming(uint32_t budgetMs)
 }
 
 bool transmitterInit() {
-  Serial.println("ESP32 WROVER-E LoRa Transmitter Starting...");
+  VLOG("ESP32 WROVER-E LoRa Transmitter Starting...");
 
   // Optional: Hardware reset of LoRa module
   #ifdef LORA_RST_PIN
@@ -146,13 +147,13 @@ bool transmitterInit() {
   }
 
   // Test communication with LoRa module
-  Serial.println("Testing LoRa module communication...");
+  VLOG("Testing LoRa module communication...");
   if (!sendATCommand("AT")) {
     return false;
   }
 
   // Configure LoRa module
-  Serial.println("Configuring LoRa module...");
+  VLOG("Configuring LoRa module...");
   
   // Set frequency band (915MHz for US, change to 868000000 for EU)
   // Check your local regulations!
@@ -181,7 +182,7 @@ bool transmitterInit() {
   sendATCommand("AT+ADDRESS?");
   sendATCommand("AT+PARAMETER?");
   
-  Serial.println("LoRa Module configured successfully!");
+  VLOG("LoRa Module configured successfully!");
   return true;
 }
 
@@ -226,16 +227,16 @@ String readModuleResponse(uint32_t timeoutMs) {
 }
 
 bool sendATCommand(String command, uint32_t timeoutMs) {
-  Serial.println("Sending: " + command);
+  VLOG("Sending: " + command);
   loraSerial.println(command);
   String response = readModuleResponse(timeoutMs);
 
   if (response.length() == 0) {
-    Serial.println("Response: [no reply]");
+    VLOG("Response: [no reply]");
     return false;
   }
 
-  Serial.println("Response: " + response);
+  VLOG("Response: " + response);
   return response.indexOf("+OK") >= 0 || response == "OK";
 }
 

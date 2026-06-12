@@ -12,6 +12,8 @@
  */
 
 #include "bar.h"
+#include "verbose.h"
+#include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_BMP280.h>
 #include <math.h>
@@ -50,8 +52,8 @@ bool bar_init(void)
     bar_set_profile(BARO_PROFILE_IMU_KALMAN);
 
     _initialised = true;
-    Serial.printf("[BAR] BMP280 initialised at 0x%02X (SDA=%d SCL=%d)\n",
-                  BMP280_I2C_ADDR, BMP280_SDA_PIN, BMP280_SCL_PIN);
+    VLOGF("[BAR] BMP280 initialised at 0x%02X (SDA=%d SCL=%d)\n",
+          BMP280_I2C_ADDR, BMP280_SDA_PIN, BMP280_SCL_PIN);
     return true;
 }
 
@@ -71,7 +73,7 @@ void bar_set_profile(BaroProfile profile)
                 Adafruit_BMP280::FILTER_OFF,
                 Adafruit_BMP280::STANDBY_MS_1
             );
-            Serial.println("[BAR] Profile: IMU+Kalman (X2 pressure, FILTER_OFF, STANDBY_MS_1)");
+            VLOG("[BAR] Profile: IMU+Kalman (X2 pressure, FILTER_OFF, STANDBY_MS_1)");
             break;
 
         case BARO_PROFILE_BARO_ONLY:
@@ -83,11 +85,11 @@ void bar_set_profile(BaroProfile profile)
                 Adafruit_BMP280::FILTER_X16,
                 Adafruit_BMP280::STANDBY_MS_250
             );
-            Serial.println("[BAR] Profile: Baro-only (X16 pressure, FILTER_X16, STANDBY_MS_250)");
+            VLOG("[BAR] Profile: Baro-only (X16 pressure, FILTER_X16, STANDBY_MS_250)");
             break;
 
         default:
-            Serial.println("[BAR] Unknown profile — no change");
+            VLOG("[BAR] Unknown profile — no change");
             break;
     }
 }
@@ -101,8 +103,8 @@ float bar_calibrate(uint16_t samples, uint32_t duration_ms)
         return -999.0f;
     }
 
-    Serial.printf("[BAR] Calibrating ground pressure — sampling for %lu ms...\n",
-                  (unsigned long)duration_ms);
+    VLOGF("[BAR] Calibrating ground pressure — sampling for %lu ms...\n",
+          (unsigned long)duration_ms);
 
     uint32_t interval_ms = duration_ms / samples;
     double   sum         = 0.0;
@@ -123,8 +125,8 @@ float bar_calibrate(uint16_t samples, uint32_t duration_ms)
     }
 
     _ground_pressure_hpa = (float)(sum / count);
-    Serial.printf("[BAR] Calibration complete — ground pressure: %.4f hPa (%d/%d samples good)\n",
-                  _ground_pressure_hpa, count, samples);
+    VLOGF("[BAR] Calibration complete — ground pressure: %.4f hPa (%d/%d samples good)\n",
+          _ground_pressure_hpa, count, samples);
     return _ground_pressure_hpa;
 }
 
