@@ -117,6 +117,7 @@ static void shutdownOTA()
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
     otaEnabled = false;
+    logger_init();  // begin new flight log only after old one could be downloaded
 }
 
 static void initOTA()
@@ -162,7 +163,11 @@ void setup()
     delay(2000);
     Serial.println("booting...");
     printFlashStorageInfo();
-    logger_init();
+#ifdef ENABLE_OTA
+    logger_mount_fs();  // mount FS so old log is served during WiFi window
+#else
+    logger_init();      // no WiFi window — start logging immediately
+#endif
 
     if (!imuInit()) {
         Serial.println("[MAIN] IMU unavailable — continuing without IMU.");
@@ -300,11 +305,9 @@ void loop()
     }
 
     // ── ZUPT — Zero Velocity Update ───────────────────────────────────────────
-    // Force velocity to zero when rocket is known to be stationary.
-    // PAD:       on launch pad before liftoff
-    // DESCENDED: on ground after landing
-    // Prevents baro noise from drifting velocity when there is no real motion.
-    if (state == FlightState::PAD || state == FlightState::DESCENDED) {
+    // Force velocity to zero once landed. PAD is left free-running so bench
+    // motion and attitude changes are visible during testing.
+    if (state == FlightState::DESCENDED) {
         kf_zero_velocity();
         lastKf = kf_get_state();
     }
@@ -458,6 +461,10 @@ void loop()
 
     if (barOk) lastAltM = lastKf.altitude_m;
 
+    // ── Transmit at fixed interval ────────────────────────────────────────────
+    if (now - lastTxMs < kTransmitIntervalMs) return;
+    lastTxMs = now;
+
     // ── Serial debug ──────────────────────────────────────────────────────────
     VLOGF(
         "[DATA] %-11s | AltKF=%6.1fm BaroAlt=%6.1fm | VelKF=%6.3fm/s | "
@@ -471,12 +478,9 @@ void loop()
         airbrakeOut ? 1 : 0
     );
 
-    // ── Transmit at fixed interval ────────────────────────────────────────────
-    if (now - lastTxMs < kTransmitIntervalMs) return;
-    lastTxMs = now;
-
     uint8_t pktBuf[TELEM_PACKET_BYTES];
     telem_pack_buf(pktBuf,
+        now,
         static_cast<uint8_t>(state),
         airbrakeOut,
         barOk,
@@ -493,7 +497,7 @@ void loop()
     );
 
     transmitterSend(telem_buf_to_hex(pktBuf, TELEM_PACKET_BYTES));
-    logger_record(now, pktBuf);
+    logger_record(pktBuf);
 
     if (transmitterReceiveDeployCommandWindow(kCommandRxWindowMs)) {
         if (state == FlightState::COAST) {

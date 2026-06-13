@@ -2,13 +2,19 @@
 #include <Arduino.h>
 #include "telemetry.h"
 
-// Initialize PSRAM buffer and mount LittleFS. Call once in setup().
+// Mount LittleFS only — no buffer allocation. Call in setup() so the old log
+// is readable via HTTP during the WiFi window before logging begins.
+void logger_mount_fs();
+
+// Allocate PSRAM buffer (or open LittleFS file) and begin recording.
+// Call after the WiFi window closes so a new flight never overwrites an
+// undownloaded log. Without ENABLE_OTA, call this directly in setup().
 void logger_init();
 
-// Append one binary record: 4-byte ts_ms (LE) + 27-byte telemetry packet = 31 bytes.
-// pkt must be exactly TELEM_PACKET_BYTES (from telem_pack_buf).
+// Append one binary record (TELEM_PACKET_BYTES = 31 bytes).
+// pkt must come from telem_pack_buf — ts_ms is already packed at bytes 0-3.
 // Called once per transmit cycle (1 Hz) so log and downlink are byte-identical.
-void logger_record(uint32_t ts_ms, const uint8_t* pkt);
+void logger_record(const uint8_t* pkt);
 
 // Write PSRAM buffer to /flight.log on LittleFS. Idempotent — safe to call
 // multiple times; only the first call writes. Call on DESCENDED transition.

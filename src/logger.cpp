@@ -2,15 +2,14 @@
 #include <LittleFS.h>
 #include <WebServer.h>
 
-// Binary log format — 31 bytes per record:
-//   Bytes 0-3:  ts_ms  uint32_t LE
-//   Bytes 4-30: telemetry packet (TELEM_PACKET_BYTES = 27)
+// Binary log format — TELEM_PACKET_BYTES (31) bytes per record.
+// ts_ms is packed at bytes 0-3 of each record (same layout as the LoRa payload).
 //
 // File header: 4 magic bytes { 'F','C','1', TELEM_PACKET_BYTES }
 // At 1 Hz: 31 bytes/s → 4 MB PSRAM ≈ 37 hours, 1.5 MB LittleFS ≈ 13 hours.
 
 static constexpr size_t kLogMaxBytes = 4 * 1024 * 1024;
-static constexpr size_t kRecordLen   = 4 + TELEM_PACKET_BYTES; // 31 bytes
+static constexpr size_t kRecordLen   = TELEM_PACKET_BYTES; // 31 bytes
 
 static const uint8_t kMagic[4] = { 'F', 'C', '1', (uint8_t)TELEM_PACKET_BYTES };
 
@@ -28,6 +27,30 @@ static WebServer sHttpServer(80);
 
 // ─── Internal ─────────────────────────────────────────────────────────────────
 
+// Snapshot current state to disk for HTTP download. Does NOT set sFlushed —
+// logging continues after return. In direct mode, closes and reopens the file
+// (LittleFS can't have a write and read handle open simultaneously).
+static void sync_to_fs_for_download()
+{
+    if (sDirectMode) {
+        if (sLogFile) {
+            sLogFile.flush();
+            sLogFile.close();
+        }
+        return;
+    }
+
+    if (!sBuf || sLen == 0) return;
+    File f = LittleFS.open("/flight.log", "w");
+    if (!f) {
+        Serial.println("[LOG] sync: failed to open /flight.log");
+        return;
+    }
+    f.write(sBuf, sLen);
+    f.close();
+}
+
+// Called on DESCENDED transition. Idempotent — only the first call writes.
 static void flush_internal()
 {
     if (sDirectMode) {
@@ -36,7 +59,7 @@ static void flush_internal()
             sLogFile.close();
         }
         sFlushed = true;
-        Serial.println("[LOG] Direct mode: log closed and ready to download");
+        Serial.println("[LOG] Direct mode: log closed");
         return;
     }
 
@@ -59,8 +82,17 @@ static void flush_internal()
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+void logger_mount_fs()
+{
+    if (!LittleFS.begin(true)) {
+        Serial.println("[LOG] LittleFS mount failed");
+    }
+}
+
 void logger_init()
 {
+    // LittleFS.begin() is idempotent — safe to call even if logger_mount_fs()
+    // already ran.
     if (!LittleFS.begin(true)) {
         Serial.println("[LOG] LittleFS mount failed");
         return;
@@ -89,22 +121,15 @@ void logger_init()
     Serial.println("[LOG] Ready — direct LittleFS mode (no PSRAM)");
 }
 
-void logger_record(uint32_t ts_ms, const uint8_t* pkt)
+void logger_record(const uint8_t* pkt)
 {
-    uint8_t rec[kRecordLen];
-    rec[0] = (uint8_t)(ts_ms & 0xFF);
-    rec[1] = (uint8_t)((ts_ms >>  8) & 0xFF);
-    rec[2] = (uint8_t)((ts_ms >> 16) & 0xFF);
-    rec[3] = (uint8_t)((ts_ms >> 24) & 0xFF);
-    memcpy(rec + 4, pkt, TELEM_PACKET_BYTES);
-
     if (sDirectMode) {
-        if (sLogFile) sLogFile.write(rec, kRecordLen);
+        if (sLogFile) sLogFile.write(pkt, kRecordLen);
         return;
     }
 
     if (!sBuf || sLen + kRecordLen > kLogMaxBytes) return;
-    memcpy(sBuf + sLen, rec, kRecordLen);
+    memcpy(sBuf + sLen, pkt, kRecordLen);
     sLen += kRecordLen;
 }
 
@@ -116,14 +141,22 @@ void logger_flush_to_fs()
 void logger_start_http()
 {
     sHttpServer.on("/log", HTTP_GET, []() {
-        flush_internal();
+        sync_to_fs_for_download();
         if (!LittleFS.exists("/flight.log")) {
             sHttpServer.send(404, "text/plain", "No log on disk\n");
+            if (sDirectMode && !sFlushed) {
+                sLogFile = LittleFS.open("/flight.log", "a");
+            }
             return;
         }
         File f = LittleFS.open("/flight.log", "r");
         sHttpServer.streamFile(f, "application/octet-stream");
         f.close();
+        // Reopen write handle so direct-mode recording continues after download
+        if (sDirectMode && !sFlushed) {
+            sLogFile = LittleFS.open("/flight.log", "a");
+            if (!sLogFile) Serial.println("[LOG] Warning: failed to reopen log after download");
+        }
     });
 
     sHttpServer.on("/log/status", HTTP_GET, []() {

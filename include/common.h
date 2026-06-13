@@ -52,14 +52,14 @@ static uint32_t           landedTimerStart   = 0;
 static bool               landedTimerRunning = false;
 
 // ─── Barometer timing ─────────────────────────────────────────────────────────
-// BMP280 at ~40 Hz (STANDBY_MS_62 + SAMPLING_X8).
+// BMP280 at a slow 1 Hz cadence to match telemetry and reduce read failures.
 // Kalman only runs on fresh baro reads to prevent velocity drift.
-static constexpr uint32_t kBaroPeriodMs = 25;
+static constexpr uint32_t kBaroPeriodMs = 1000;
 static uint32_t lastBaroMs   = 0;
 static uint32_t lastKalmanMs = 0;
 
 #ifdef ENABLE_OTA
-static constexpr uint32_t kWifiActiveWindowMs = 3UL * 60UL * 1000UL;
+static constexpr uint32_t kWifiActiveWindowMs = 1UL * 60UL * 1000UL;
 #endif
 
 // ─── Flight state machine ─────────────────────────────────────────────────────

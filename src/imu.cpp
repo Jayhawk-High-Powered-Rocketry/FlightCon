@@ -80,6 +80,14 @@ static float _lastGoodYaw = 0.0f;
 static float _lastGoodPitch = 0.0f;
 static float _lastGoodRoll = 0.0f;
 
+// Consecutive quaternion-read failure tracking for auto-recovery
+static int      _quatFailCount      = 0;
+static uint32_t _lastRecoveryMs     = 0;
+static constexpr int      kQuatFailRecoverThreshold = 10;
+static constexpr uint32_t kMinRecoveryIntervalMs    = 2000;
+
+static bool _loadCalibration();  // forward declaration
+
 static void _recoverI2cBus()
 {
     Wire.end();
@@ -116,6 +124,32 @@ static void _recoverI2cBus()
 static void _resetImuBus()
 {
     _recoverI2cBus();
+}
+
+// Re-init the BNO055 after repeated quaternion failures (I2C glitch or sensor
+// entering CONFIG mode under vibration). Reloads saved calibration offsets so
+// the sensor comes back fully calibrated without a full imuInit() call.
+static bool _attemptImuRecovery()
+{
+    Serial.println("[IMU] Repeated quat failures — attempting sensor recovery.");
+    _recoverI2cBus();
+    delay(50);
+
+    bool ok = false;
+    for (int i = 0; i < 3 && !ok; ++i) {
+        ok = bno.begin(OPERATION_MODE_IMUPLUS);
+        if (!ok) { _recoverI2cBus(); delay(50); }
+    }
+
+    if (ok) {
+        _loadCalibration();
+        bno.setExtCrystalUse(kUseExternalCrystal);
+        Serial.println("[IMU] Recovery succeeded.");
+    } else {
+        Serial.println("[IMU] Recovery failed — IMU offline.");
+        _ready = false;
+    }
+    return ok;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -188,6 +222,13 @@ static void _readOrientationFromEuler(ImuSample& sample)
     sample.pitch = euler.z();
 }
 
+static void _restoreLastGoodOrientation(ImuSample& sample)
+{
+    sample.yaw = _lastGoodYaw;
+    sample.pitch = _lastGoodPitch;
+    sample.roll = _lastGoodRoll;
+}
+
 static void _readImuIntoSample(ImuSample& sample)
 {
     bool orientationOk = _readOrientationFromQuat(sample);
@@ -196,21 +237,31 @@ static void _readImuIntoSample(ImuSample& sample)
         orientationOk = _readOrientationFromQuat(sample);
     }
 
-    if (!orientationOk && _haveLastGoodOrientation) {
-        // Quaternion failed twice: fall back to the chip's Euler output.
-        _readOrientationFromEuler(sample);
-        VLOG("[IMU] Quaternion read failed; using Euler fallback.");
-    }
-
-    if (!orientationOk && !_haveLastGoodOrientation) {
-        _readOrientationFromEuler(sample);
-    }
-
     if (orientationOk) {
-        _lastGoodYaw = sample.yaw;
+        _quatFailCount = 0;
+        _lastGoodYaw   = sample.yaw;
         _lastGoodPitch = sample.pitch;
-        _lastGoodRoll = sample.roll;
+        _lastGoodRoll  = sample.roll;
         _haveLastGoodOrientation = true;
+    } else {
+        _quatFailCount++;
+
+        if (_haveLastGoodOrientation) {
+            // Keep the last stable orientation rather than trusting a possibly
+            // bad Euler frame from the sensor.
+            _restoreLastGoodOrientation(sample);
+            VLOG("[IMU] Quaternion read failed; reusing last good orientation.");
+        } else {
+            _readOrientationFromEuler(sample);
+        }
+
+        uint32_t now = millis();
+        if (_quatFailCount >= kQuatFailRecoverThreshold &&
+            (now - _lastRecoveryMs) >= kMinRecoveryIntervalMs) {
+            _quatFailCount  = 0;
+            _lastRecoveryMs = now;
+            _attemptImuRecovery();
+        }
     }
 
     // VECTOR_LINEARACCEL gives m/s^2 with gravity subtracted.

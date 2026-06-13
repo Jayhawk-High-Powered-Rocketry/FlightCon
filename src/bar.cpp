@@ -71,9 +71,9 @@ void bar_set_profile(BaroProfile profile)
                 Adafruit_BMP280::SAMPLING_X2,   // temperature
                 Adafruit_BMP280::SAMPLING_X2,   // pressure
                 Adafruit_BMP280::FILTER_OFF,
-                Adafruit_BMP280::STANDBY_MS_1
+                Adafruit_BMP280::STANDBY_MS_1000
             );
-            VLOG("[BAR] Profile: IMU+Kalman (X2 pressure, FILTER_OFF, STANDBY_MS_1)");
+            VLOG("[BAR] Profile: IMU+Kalman (X2 pressure, FILTER_OFF, STANDBY_MS_1000)");
             break;
 
         case BARO_PROFILE_BARO_ONLY:
