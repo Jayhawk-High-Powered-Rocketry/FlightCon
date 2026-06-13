@@ -13,13 +13,14 @@ HardwareSerial loraSerial(2);
 
 // These values must match the receiver/Raspberry Pi side.
 #define LORA_BAUD_RATE 115200
+#define LORA_CRFOP 22   // max output power (dBm); RYLR998 range is -9 to 22
 #define LORA_BAND 915000000
 #define NETWORK_ID 1
 #define DEVICE_ADDRESS 6
 #define TARGET_ADDRESS 2
 
 String readModuleResponse(uint32_t timeoutMs = 1000);
-bool sendATCommand(String command, uint32_t timeoutMs = 1000);
+bool sendATCommand(String command, uint32_t timeoutMs = 1000, bool expectOk = true);
 bool sendMessage(int address, String message);
 void checkForMessages();
 
@@ -146,41 +147,60 @@ bool transmitterInit() {
     loraSerial.read();
   }
 
-  // Test communication with LoRa module
+  // Test communication with LoRa module — retry up to 5x, module can be slow to boot
   VLOG("Testing LoRa module communication...");
-  if (!sendATCommand("AT")) {
+  bool atOk = false;
+  for (int attempt = 0; attempt < 5 && !atOk; attempt++) {
+    if (attempt > 0) {
+      Serial.printf("[LORA] AT retry %d/4...\n", attempt);
+      delay(1000);
+    }
+    atOk = sendATCommand("AT");
+  }
+  if (!atOk) {
+    Serial.println("[LORA] Module not responding — check wiring on GPIO21/22 and power");
     return false;
   }
 
   // Configure LoRa module
   VLOG("Configuring LoRa module...");
-  
-  // Set frequency band (915MHz for US, change to 868000000 for EU)
-  // Check your local regulations!
-  if (!sendATCommand("AT+BAND=" + String(LORA_BAND))) {
-    return false;
-  }
-  
-  // Set network ID (0-15) to avoid interference
-  if (!sendATCommand("AT+NETWORKID=" + String(NETWORK_ID))) {
-    return false;
-  }
-  
-  // Set this module's address
-  if (!sendATCommand("AT+ADDRESS=" + String(DEVICE_ADDRESS))) {
-    return false;
-  }
-  
-  // Optional: Set transmission power (5-22 dBm)
-  if (!sendATCommand("AT+PARAMETER=9,7,1,12")) {
+
+    // Start from a known state before applying the requested profile.
+    // After reset, module emits +READY when it boots — flush it before next command.
+    sendATCommand("AT+RESET", 2000, false);
+    delay(2500);
+    while (loraSerial.available()) loraSerial.read();
+
+    if (!sendATCommand("AT+BAND=" + String(LORA_BAND))) {
+      return false;
+    }
+
+    if (!sendATCommand("AT+NETWORKID=" + String(NETWORK_ID))) {
+      return false;
+    }
+
+    if (!sendATCommand("AT+ADDRESS=" + String(DEVICE_ADDRESS))) {
+      return false;
+    }
+
+    if (!sendATCommand("AT+PARAMETER=7,8,1,12")) {
+      return false;
+    }
+
+    if (!sendATCommand("AT+CRFOP=" + String(LORA_CRFOP))) {
     return false;
   }
 
+    if (!sendATCommand("AT+MODE=0")) {
+      return false;
+    }
+
   // Print back key config so mismatches are obvious.
-  sendATCommand("AT+BAND?");
-  sendATCommand("AT+NETWORKID?");
-  sendATCommand("AT+ADDRESS?");
-  sendATCommand("AT+PARAMETER?");
+    sendATCommand("AT+PARAMETER?", 1000, false);
+    sendATCommand("AT+BAND?", 1000, false);
+    sendATCommand("AT+CRFOP?", 1000, false);
+    sendATCommand("AT+NETWORKID?", 1000, false);
+    sendATCommand("AT+ADDRESS?", 1000, false);
   
   VLOG("LoRa Module configured successfully!");
   return true;
@@ -226,18 +246,24 @@ String readModuleResponse(uint32_t timeoutMs) {
   return response;
 }
 
-bool sendATCommand(String command, uint32_t timeoutMs) {
+bool sendATCommand(String command, uint32_t timeoutMs, bool expectOk) {
   VLOG("Sending: " + command);
   loraSerial.println(command);
   String response = readModuleResponse(timeoutMs);
 
   if (response.length() == 0) {
-    VLOG("Response: [no reply]");
+    if (expectOk) Serial.printf("[LORA] No reply to: %s\n", command.c_str());
     return false;
   }
 
   VLOG("Response: " + response);
-  return response.indexOf("+OK") >= 0 || response == "OK";
+  if (!expectOk) {
+    return true;
+  }
+
+  bool ok = response.indexOf("+OK") >= 0 || response == "OK";
+  if (!ok) Serial.printf("[LORA] Unexpected reply to %s: %s\n", command.c_str(), response.c_str());
+  return ok;
 }
 
 bool sendMessage(int address, String message) {

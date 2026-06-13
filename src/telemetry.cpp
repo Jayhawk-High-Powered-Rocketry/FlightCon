@@ -31,22 +31,21 @@ static void pack_u16(uint8_t* p, float v, float scale, float lo, float hi)
 
 // ─── Public implementation ────────────────────────────────────────────────────
 
-String telem_pack_hex(uint8_t state,
-                      bool    airbrake,
-                      bool    baro_ok,
-                      bool    imu_ok,
-                      float   alt_kf,
-                      float   vel_kf,
-                      float   baro_alt,
-                      float   accel_y,
-                      float   tilt_deg,
-                      float   roll_deg,
-                      float   pitch_deg,
-                      float   yaw_deg,
-                      float   temp_c)
+void telem_pack_buf(uint8_t* buf,
+                    uint8_t state,
+                    bool    airbrake,
+                    bool    baro_ok,
+                    bool    imu_ok,
+                    float   alt_kf,
+                    float   vel_kf,
+                    float   baro_alt,
+                    float   accel_y,
+                    float   tilt_deg,
+                    float   roll_deg,
+                    float   pitch_deg,
+                    float   yaw_deg,
+                    float   temp_c)
 {
-    uint8_t buf[TELEM_PACKET_BYTES];
-
     // Byte 0 — flags
     buf[0] = (uint8_t)(
         ((state & 0x07u) << 5) |
@@ -67,18 +66,41 @@ String telem_pack_hex(uint8_t state,
     pack_i16(buf + 21, pitch_deg,  100.0f,   -90.0f,   90.0f);
     pack_u16(buf + 23, yaw_deg,    100.0f,    0.0f,   360.0f);
     pack_i16(buf + 25, temp_c,     100.0f,  -100.0f,  100.0f);
+}
 
-    // Hex-encode: 27 bytes → 54 ASCII chars, no null-byte issues over LoRa
+String telem_buf_to_hex(const uint8_t* buf, size_t len)
+{
     static const char kHex[16] = {
         '0','1','2','3','4','5','6','7',
         '8','9','A','B','C','D','E','F'
     };
 
     String hex;
-    hex.reserve(TELEM_PACKET_BYTES * 2);
-    for (size_t i = 0; i < TELEM_PACKET_BYTES; i++) {
+    hex.reserve(len * 2);
+    for (size_t i = 0; i < len; i++) {
         hex += kHex[buf[i] >> 4];
         hex += kHex[buf[i] & 0x0F];
     }
     return hex;
+}
+
+String telem_pack_hex(uint8_t state,
+                      bool    airbrake,
+                      bool    baro_ok,
+                      bool    imu_ok,
+                      float   alt_kf,
+                      float   vel_kf,
+                      float   baro_alt,
+                      float   accel_y,
+                      float   tilt_deg,
+                      float   roll_deg,
+                      float   pitch_deg,
+                      float   yaw_deg,
+                      float   temp_c)
+{
+    uint8_t buf[TELEM_PACKET_BYTES];
+    telem_pack_buf(buf, state, airbrake, baro_ok, imu_ok,
+                   alt_kf, vel_kf, baro_alt, accel_y,
+                   tilt_deg, roll_deg, pitch_deg, yaw_deg, temp_c);
+    return telem_buf_to_hex(buf, TELEM_PACKET_BYTES);
 }

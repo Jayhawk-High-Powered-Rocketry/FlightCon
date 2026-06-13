@@ -22,8 +22,27 @@
 
 static constexpr size_t TELEM_PACKET_BYTES = 27;
 
-// Pack one telemetry frame and return it as a hex string for LoRa transmission.
-// Fields with invalid sensors should pass 0.0f; set baro_ok/imu_ok accordingly.
+// Pack one telemetry frame into buf (must be TELEM_PACKET_BYTES).
+// Call this first; pass buf to telem_buf_to_hex for LoRa and logger_record for storage.
+void telem_pack_buf(uint8_t* buf,
+                    uint8_t state,
+                    bool    airbrake,
+                    bool    baro_ok,
+                    bool    imu_ok,
+                    float   alt_kf,
+                    float   vel_kf,
+                    float   baro_alt,
+                    float   accel_y,
+                    float   tilt_deg,
+                    float   roll_deg,
+                    float   pitch_deg,
+                    float   yaw_deg,
+                    float   temp_c);
+
+// Hex-encode a raw byte buffer into a String for LoRa transmission.
+String telem_buf_to_hex(const uint8_t* buf, size_t len);
+
+// Convenience wrapper: pack + hex-encode in one call.
 String telem_pack_hex(uint8_t state,
                       bool    airbrake,
                       bool    baro_ok,
