@@ -525,6 +525,18 @@ void loop()
             Serial.printf("[CTRL] Ground deploy command ignored in %s\n", stateLabel(state));
         }
     }
+
+    if (Serial.available()) {
+        char cmd = Serial.read();
+        if (cmd == 'clrmem') {  // Type 'clrmem' to clear calibration
+            Serial.println("[IMU] Clearing saved calibration...");
+            EEPROM.begin(64);
+            uint32_t magic = 0;
+            EEPROM.put(0, magic);  // Clear magic number
+            EEPROM.end();
+            Serial.println("[IMU] Calibration cleared. Reboot to recalibrate.");
+        }
+    }
 }
 
 /*
