@@ -92,34 +92,58 @@ extern float KF_Q_ALTITUDE;   // metres^2    — altitude process noise
 extern float KF_Q_VELOCITY;   // (m/s)^2     — velocity process noise
 extern float KF_R_ALTITUDE;   // metres^2    — baro measurement noise variance
 
-// Recommended constants for each flight phase (read-only helpers)
-static constexpr float KF_TUNE_PAD_Q_ALT   = 0.01f;
-static constexpr float KF_TUNE_PAD_Q_VEL   = 0.001f;
-static constexpr float KF_TUNE_PAD_R_ALT   = 2.0f;
+// ═══════════════════════════════════════════════════════════════════════════
+// RECOMMENDED TUNING FOR EACH FLIGHT PHASE
+// ═══════════════════════════════════════════════════════════════════════════
+// Strategy: Trust barometer (low R) throughout all phases.
+// Minimize velocity drift on PAD/DESCENDED (very low Q_VEL).
+// Allow responsive updates during powered flight, but still trust baro.
 
-static constexpr float KF_TUNE_LIFTOFF_Q_ALT = 0.1f;
-static constexpr float KF_TUNE_LIFTOFF_Q_VEL = 2.0f;
-static constexpr float KF_TUNE_LIFTOFF_R_ALT = 4.0f;
+// PAD: On launch pad, stationary
+// Goal: Altitude stable, velocity near zero. Detect drift issues early.
+// LOW R = trust baro heavily to reduce drift
+// VERY LOW Q_VEL = keep velocity near zero on stationary pad
+static constexpr float KF_TUNE_PAD_Q_ALT   = 0.005f;   // metres² — stay stable
+static constexpr float KF_TUNE_PAD_Q_VEL   = 0.0001f;  // (m/s)² — resist velocity creep
+static constexpr float KF_TUNE_PAD_R_ALT   = 0.4f;     // metres² — trust baro strongly
 
-static constexpr float KF_TUNE_BOOST_Q_ALT = 1.0f;
-static constexpr float KF_TUNE_BOOST_Q_VEL = 5.0f;
-static constexpr float KF_TUNE_BOOST_R_ALT = 8.0f;
+// LIFTOFF: Transition from PAD to powered flight
+// Goal: Quickly respond to initial acceleration while staying stable
+static constexpr float KF_TUNE_LIFTOFF_Q_ALT = 0.05f;   // metres²
+static constexpr float KF_TUNE_LIFTOFF_Q_VEL = 1.0f;    // (m/s)² — respond to IMU accel
+static constexpr float KF_TUNE_LIFTOFF_R_ALT = 2.0f;    // metres² — trust baro
 
-static constexpr float KF_TUNE_COAST_Q_ALT = 0.1f;
-static constexpr float KF_TUNE_COAST_Q_VEL = 2.0f;
-static constexpr float KF_TUNE_COAST_R_ALT = 1.5f;
+// BOOST: Motor burning, high acceleration
+// Goal: Track fast altitude changes, responsive to acceleration
+// Still trust baro as ground truth; lower R than before
+static constexpr float KF_TUNE_BOOST_Q_ALT = 0.5f;      // metres² — responsive
+static constexpr float KF_TUNE_BOOST_Q_VEL = 2.0f;      // (m/s)² — high accel input
+static constexpr float KF_TUNE_BOOST_R_ALT = 4.0f;      // metres² — allow faster updates
 
-static constexpr float KF_TUNE_APOGEE_Q_ALT = 0.05f;
-static constexpr float KF_TUNE_APOGEE_Q_VEL = 0.5f;
-static constexpr float KF_TUNE_APOGEE_R_ALT = 1.0f;
+// COAST: Motor out, ascending to apogee
+// Goal: Precise altitude tracking with IMU. Trust baro more (low R).
+static constexpr float KF_TUNE_COAST_Q_ALT = 0.05f;     // metres² — smooth
+static constexpr float KF_TUNE_COAST_Q_VEL = 0.8f;      // (m/s)² — IMU + baro fusion
+static constexpr float KF_TUNE_COAST_R_ALT = 0.8f;      // metres² — trust baro heavily
 
-static constexpr float KF_TUNE_DESCENT_Q_ALT = 0.02f;
-static constexpr float KF_TUNE_DESCENT_Q_VEL = 0.1f;
-static constexpr float KF_TUNE_DESCENT_R_ALT = 1.5f;
+// APOGEE: Peak altitude detection
+// Goal: Stable velocity near zero, precise altitude
+static constexpr float KF_TUNE_APOGEE_Q_ALT = 0.02f;    // metres² — very stable
+static constexpr float KF_TUNE_APOGEE_Q_VEL = 0.2f;     // (m/s)² — keep velocity low
+static constexpr float KF_TUNE_APOGEE_R_ALT = 0.6f;     // metres² — trust baro
 
-static constexpr float KF_TUNE_LANDING_Q_ALT = 0.5f;
-static constexpr float KF_TUNE_LANDING_Q_VEL = 1.0f;
-static constexpr float KF_TUNE_LANDING_R_ALT = 4.0f;
+// DESCENT: Falling after apogee, airbrakes deployed
+// Goal: Accurate altitude for landing detection. TRUST BAROMETER MOST.
+// This is critical for safe landing detection.
+static constexpr float KF_TUNE_DESCENT_Q_ALT = 0.01f;   // metres² — very smooth
+static constexpr float KF_TUNE_DESCENT_Q_VEL = 0.05f;   // (m/s)² — damped velocity
+static constexpr float KF_TUNE_DESCENT_R_ALT = 0.8f;    // metres² — trust baro strongly
+
+// LANDED: On ground, flight over
+// Goal: Velocity forced to zero (ZUPT). Altitude locked at landing point.
+static constexpr float KF_TUNE_LANDING_Q_ALT = 0.2f;    // metres²
+static constexpr float KF_TUNE_LANDING_Q_VEL = 0.2f;    // (m/s)² — very low (ZUPT active)
+static constexpr float KF_TUNE_LANDING_R_ALT = 2.0f;    // metres² — moderate trust
 
 // Flight phase enum and runtime API
 typedef enum {

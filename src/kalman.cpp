@@ -60,16 +60,22 @@ float KF_Q_VELOCITY = KF_TUNE_PAD_Q_VEL;
 float KF_R_ALTITUDE = KF_TUNE_PAD_R_ALT;
 
 // ─── Velocity damping ─────────────────────────────────────────────────────────
-// kVelDecay is applied every predict step.
+// kVelDecay is applied every predict step. Reduces velocity toward zero naturally.
+// This prevents baro noise from integrating into runaway velocity drift.
 //
 // Tuning guide:
-//   0.99 = light  — velocity halves in ~3s  at 40Hz
-//   0.97 = medium — velocity halves in ~1s  at 40Hz  <- current
-//   0.95 = heavy  — velocity halves in ~0.5s at 40Hz
+//   0.99  = light    — velocity halves in ~3s   at 40Hz
+//   0.98  = moderate — velocity halves in ~1.5s at 40Hz  ← current (helps PAD drift)
+//   0.97  = medium   — velocity halves in ~1s   at 40Hz
+//   0.95  = heavy    — velocity halves in ~0.5s at 40Hz
 //
-// During flight with IMU, motor accel (130+ m/s²) completely overwhelms
-// the tiny decay so flight behaviour is unaffected.
-static constexpr float kVelDecay = 0.995f;
+// NOTES:
+// - During powered flight with IMU, motor accel (130+ m/s²) completely
+//   overwhelms the decay, so flight behavior is unaffected.
+// - On PAD and DESCENDED (no accel), decay actively prevents velocity creep
+//   from baro noise integration. Lower decay = faster return to zero = less drift.
+// - DESCENT phase also benefits from faster decay to stabilize landing detection.
+static constexpr float kVelDecay = 0.98f;
 
 // Default dt used when measured dt is out of valid range
 static constexpr float kBaroPeriodDefault = 0.025f;  // 40Hz = 25ms

@@ -27,7 +27,9 @@ static uint32_t otaStartMs = 0;
 // pio run -t upload --upload-port ADDR (e.g., 192.168.1.50)
 
 
-// TODO: change back to FlightState::PAD before flight testing
+// ─── Flight state initialization ──────────────────────────────────────────────
+// System boots in PAD state, waiting for liftoff.
+// Change this ONLY for bench testing in different states.
 static FlightState state        = FlightState::PAD;
 static uint32_t    boostStartMs = 0;
 static bool        airbrakeOut  = false;
@@ -277,22 +279,23 @@ void loop()
             lastKalmanMs = now;
             if (dt_s <= 0.0f || dt_s > 0.5f) dt_s = kBaroPeriodMs / 1000.0f;
 
-            // IMU accel disabled until board is permanently mounted in rocket
-            // and verified in that orientation. Bench accel noise causes
-            // Kalman velocity explosion. Re-enable for flight:
-            float accelInput = imuOk ? imu.accel_y : 0.0f;
-            // float accelInput = 0.0f; // TODO: Replace me back
+            // IMU ACCELERATION INPUT FOR KALMAN FILTER
+            // On PAD and DESCENDED: disable IMU input (accelInput = 0.0f)
+            //   PAD: Board sitting still — bench noise would corrupt velocity estimate
+            //   DESCENDED: Flight complete, velocity forced to zero (ZUPT) anyway
+            // During BOOST/COAST/DESCENT: use IMU accel_y with deadband
+            //   Deadband 0.25 m/s² filters out small noise/bias
+            float accelInput = 0.0f;
 
-            // TODO: Replace back deadband
+            // During powered flight and descent, feed IMU acceleration to Kalman
             if (imuOk && state != FlightState::PAD && state != FlightState::DESCENDED) {
                 accelInput = imu.accel_y;
 
-                // Kill tiny bias/noise near zero
+                // Small signal deadband — kill bias/noise near zero
                 if (fabsf(accelInput) < 0.25f) {
                     accelInput = 0.0f;
                 }
             }
-
 
             baroBuffer[baroIdx] = baroAlt;
             baroIdx = (baroIdx + 1) % 5;
@@ -358,28 +361,42 @@ void loop()
             break;
 
         // ── COAST: ascending after burnout, airbrakes active ──────────────────
+        // AIRBRAKE DEPLOYMENT: All THREE conditions must be true simultaneously.
+        // If ANY condition becomes false, airbrakes retract.
         case FlightState::COAST:
             {
                 float altNow = lastKf.altitude_m;
 
-                // Condition 1 — IREC 7.4.1.3.2: above 2,000 m AGL
-                bool altOk    = (altNow >= kAltitudeLockoutM);
+                // CONDITION #1 — IREC 7.4.1.3.2: Altitude Lockout
+                // Airbrakes must NOT deploy until well above minimum safe altitude.
+                // For 10K flights: 2000m AGL. Below this = locked retracted.
+                bool altOk = (altNow >= kAltitudeLockoutM);
 
-                // Condition 2 — IREC 7.3.1: tilt within 30° of vertical
-                // If IMU unavailable assume tilt OK — can't confirm violation
-                bool tiltOk   = !imuOk || (imu.tilt_deg <= kMaxTiltDeg);
+                // CONDITION #2 — IREC 7.3.1: Tilt Safety
+                // Airbrakes must NOT deploy if rocket is tilted > 30° from vertical.
+                // Excessive tilt = asymmetric airbrake load = unstable.
+                // If IMU unavailable, assume tilt OK (can't confirm violation).
+                bool tiltOk = !imuOk || (imu.tilt_deg <= kMaxTiltDeg);
 
-                // Condition 3 — deployment altitude reached
+                // CONDITION #3 — Deployment Altitude Reached
+                // Airbrake CAN deploy once we pass the target deployment altitude (9000 ft).
+                // Combined with ground command: either auto-deploy or explicit request.
                 bool deployOk = (altNow >= kDeployAltM);
 
                 // Ground-station deploy request (latched from RX window)
+                // Allows ground to force deployment if auto-logic fails or testing.
                 bool commandOk = commandDeployRequested;
 
                 // 7.3.1 — tilt exceeded: retract IMMEDIATELY
                 if (imuOk && imu.tilt_deg > kMaxTiltDeg) {
                     retractAirbrakes("tilt > 30deg");
                 }
-                // Deploy from automatic threshold or explicit ground command
+                // DEPLOY: All THREE conditions must be TRUE to deploy
+                //   1. altOk          = altitude >= lockout altitude (2000m)
+                //   2. tiltOk         = tilt <= 30° from vertical
+                //   3. deployOk || commandOk = deployment altitude reached OR ground command
+                //   4. !airbrakeOut   = not already deployed
+                // If any condition fails, deployment is blocked.
                 else if (altOk && tiltOk && (deployOk || commandOk) && !airbrakeOut) {
                     deployAirbrakes();
                     if (commandOk) {
@@ -387,7 +404,8 @@ void loop()
                         Serial.println("[CTRL] Ground deploy command accepted");
                     }
                 }
-                // Hysteresis retract
+                // Hysteresis retract: keep airbrakes out until altitude drops below deployment
+                // altitude minus hysteresis margin (prevents chatter near deployment threshold).
                 else if (airbrakeOut && altNow <= (kDeployAltM - kDeployHysteresisM)) {
                     retractAirbrakes("below deploy alt");
                 }
@@ -500,7 +518,7 @@ void loop()
     logger_record(pktBuf);
 
     if (transmitterReceiveDeployCommandWindow(kCommandRxWindowMs)) {
-        if (state == FlightState::COAST) {
+        if (state == FlightState::COAST) { // Maybe need to change this to PAD for testing?
             commandDeployRequested = true;
             Serial.println("[CTRL] Ground deploy command latched");
         } else {

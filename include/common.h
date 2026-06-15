@@ -17,31 +17,54 @@ static constexpr float kNeutralAngle  = 8.0f;    // degrees — retracted / safe
 
 // ─── IREC compliance constants ────────────────────────────────────────────────
 
-// 7.4.1.3.2 — 10K flight: airbrakes locked until 2,000 m AGL (1,200 m AGL for Test launch)
-//TODO change back after done testing - 1200.0f
-static constexpr float kAltitudeLockoutM = 1200.0f;
+// AIRBRAKE DEPLOYMENT ALTITUDE (metres AGL)
+// Set based on OpenRocket sim targeting 10,000 ft apogee.
+// 9000 ft = 2740 m. Deploying at this altitude gives ~1500 ft descent distance for airbrake control.
+// Must be >= kAltitudeLockoutM to comply with IREC 7.4.1.3.2.
+static constexpr float kDeployAltM = 2740.0f;
 
-// 7.3.1 — retract immediately if tilt exceeds 30° from vertical
-static constexpr float kMaxTiltDeg = 30.0f;
+// ALTITUDE LOCKOUT (metres AGL)
+// Per IREC 7.4.1.3.2: airbrakes must be locked (retracted) below this altitude.
+// 10K flight = 2500 m. Dual petals cannot deploy until well above this.
+// Condition #1 for airbrake deployment: altitude >= this value.
+static constexpr float kAltitudeLockoutM = 2500.0f;
 
-// Airbrake deployment altitude (AGL, metres).
-// Set from OpenRocket simulation. Must be above kAltitudeLockoutM.
-static constexpr float kDeployAltM        = 1500.0f; // 2500 m for real -- (1,500 m AGL for Test launch)
+// ALTITUDE LOCKOUT HYSTERESIS (metres AGL)
+// Once deployed, airbrakes retract if altitude drops below (kDeployAltM - kDeployHysteresisM).
+// Prevents chatter if altitude oscillates near deployment threshold.
 static constexpr float kDeployHysteresisM = 5.0f;
 
+// TILT SAFETY (degrees from vertical)
+// Per IREC 7.3.1: retract airbrakes immediately if tilt exceeds this.
+// 30° = airbrake extension must not exceed 30° from vertical for safe deployment.
+// Condition #2 for airbrake deployment: tilt <= this value.
+static constexpr float kMaxTiltDeg = 30.0f;
+
 // ─── Liftoff / burnout detection ─────────────────────────────────────────────
-// 550 lb thrust / 42 lb rocket = ~13G off pad.
-//
-// BNO055 in fusion mode clips at ~4G (39.2 m/s²) so we cannot use a 5G
-// threshold directly. Instead we use a dual confirm:
-//   1. IMU accel_y exceeds 2G (19.6 m/s²) — below clip limit, reliable
-//   2. Baro altitude has risen at least 20m above launch altitude
-// Both must be true simultaneously to trigger PAD -> BOOST.
-// This prevents false triggers from pad bumps (IMU alone) or baro noise (baro alone).
-static constexpr float    kLiftoffAccelMs2   = 20.0f;   // 2G — below BNO055 4G clip limit
-static constexpr float    kLiftoffAltM       = 20.0f;   // metres AGL — baro confirm
-static constexpr float    kBurnoutAccelMs2   = 2.0f;    // near-zero = motor out
-static constexpr uint32_t kBurnoutBackstopMs = 5000;    // REAL 4s burn + 2s margin (test is 3.5s burn + 1.5s margin)
+// Dual-confirm strategy prevents false triggers from pad vibration or baro noise.
+
+// LIFTOFF ACCELERATION THRESHOLD (m/s²)
+// 550 lb thrust / 42 lb rocket = ~13G off pad. BNO055 clips at ~4G (39.2 m/s²).
+// Threshold set to 2G (19.6 m/s²) — below saturation, reliable.
+// Condition #1 for PAD->BOOST: IMU accel_y must exceed this.
+static constexpr float kLiftoffAccelMs2 = 20.0f;
+
+// LIFTOFF ALTITUDE CONFIRM (metres AGL)
+// Altitude must rise at least this much for baro confirmation of liftoff.
+// Prevents false trigger from a pad bump detected by accel alone.
+// Condition #2 for PAD->BOOST (must be true WITH accel condition): altitude >= 20m AGL.
+static constexpr float kLiftoffAltM = 20.0f;
+
+// BURNOUT ACCELERATION THRESHOLD (m/s²)
+// Motor burning detection: accel drops below 2 m/s² = motor out.
+// Trigger from BOOST->COAST when accel goes near zero.
+static constexpr float kBurnoutAccelMs2 = 2.0f;
+
+// BURNOUT BACKUP TIMER (milliseconds)
+// Safety backstop: even if accel never drops, BOOST->COAST after this time.
+// Motor burn time = 4 seconds. Margin = 100ms. Total = 4100ms.
+// Ensures we don't stay in BOOST state if sensors fail.
+static constexpr uint32_t kBurnoutBackstopMs = 4100;
 
 // ─── Landing detection ────────────────────────────────────────────────────────
 // DESCENDING → DESCENDED when velocity stays below threshold for 3 seconds.
