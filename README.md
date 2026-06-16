@@ -52,6 +52,11 @@ now this command will begin taking transmitting data and adding it to database. 
 
 run "cargo run"
 
+third terminal 
+`cd src/moose-bowl-db/frontend`
+`npm run dev -- --open`
+Might need `npm install` `cd frontend`
+
 # STEP 3 put esp on battery:
 unplug esp from the cable. 
 

@@ -58,7 +58,7 @@ static constexpr int   kRocketAxisZ     =  2;
 static constexpr float kRocketAxisXSign    =  1.0f;
 static constexpr float kRocketAxisYSign    =  1.0f; // flip to -1.0f if needed
 static constexpr float kRocketAxisZSign    =  1.0f;
-static constexpr float kPitchMountOffsetDeg = 90.0f; // IMU mounted 90° nose-down
+static constexpr float kPitchMountOffsetDeg = 0.0f; 
 
 // ─── EEPROM / flash calibration storage ──────────────────────────────────────
 // Layout:
@@ -388,12 +388,12 @@ bool imuRead(ImuSample &sample)
     // MAG is intentionally not checked — IMUPLUS mode does not use it.
 
     // DEBUGGING
-    {
-    uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
-    bno.getCalibration(&sys, &gyro, &accel, &mag);
-    Serial.printf("[IMU-CAL] SYS=%u GYRO=%u ACCEL=%u MAG=%u | calSaved=%d\n",
-                  sys, gyro, accel, mag, _calSaved ? 1 : 0);
-    }
+    // {
+    // uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
+    // bno.getCalibration(&sys, &gyro, &accel, &mag);
+    // Serial.printf("[IMU-CAL] SYS=%u GYRO=%u ACCEL=%u MAG=%u | calSaved=%d\n",
+    //               sys, gyro, accel, mag, _calSaved ? 1 : 0);
+    // }
     uint32_t now = millis();
     if (now - _lastDebugPrintMs >= kImuDebugPrintPeriodMs) {
         _lastDebugPrintMs = now;
