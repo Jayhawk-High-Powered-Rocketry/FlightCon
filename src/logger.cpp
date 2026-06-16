@@ -38,17 +38,22 @@ static void reopen_for_append()
 
 void logger_mount_fs()
 {
-    if (!LittleFS.begin(true)) {
+    Serial.println("[LOG] LittleFS starting mount...");
+    if (!LittleFS.begin()) {
         Serial.println("[LOG] LittleFS mount failed");
+        return;
     }
+    Serial.println("[LOG] LittleFS mounted successfully");
 }
 
 void logger_init()
 {
-    if (!LittleFS.begin(true)) {
+    Serial.println("[LOG] LittleFS starting mount for logger...");
+    if (!LittleFS.begin()) {
         Serial.println("[LOG] LittleFS mount failed");
         return;
     }
+    Serial.println("[LOG] LittleFS mounted successfully");
 
     sLogFile = LittleFS.open("/flight.log", "w");
     if (!sLogFile) {

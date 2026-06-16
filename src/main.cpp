@@ -21,12 +21,8 @@ static bool otaEnabled = false;
 static uint32_t otaStartMs = 0;
 #endif
 
-// README: How to run:
-
-// pio run -t upload
-// -> Get IP Address from console:
-// pio run -t upload --upload-port ADDR (e.g., 192.168.1.50)
-
+// ─── Force IMU recalibration on every boot (for testing/commissioning) ─────
+static constexpr bool kForceImuRecalibration = false;
 
 // ─── Flight state initialization ──────────────────────────────────────────────
 // System boots in PAD state, waiting for liftoff.
@@ -120,7 +116,9 @@ static void shutdownOTA()
     WiFi.softAPdisconnect(true);
     WiFi.mode(WIFI_OFF);
     otaEnabled = false;
-    logger_init();  // begin new flight log only after old one could be downloaded
+    // Serial.println("[MAIN] Before logger");
+    // logger_init();  // begin new flight log only after old one could be downloaded
+    // Serial.println("[MAIN] After logger");
 }
 
 static void initOTA()
@@ -166,14 +164,19 @@ void setup()
     delay(2000);
     Serial.println("booting...");
     printFlashStorageInfo();
-#ifdef ENABLE_OTA
-    logger_mount_fs();  // mount FS so old log is served during WiFi window
-#else
-    logger_init();      // no WiFi window — start logging immediately
-#endif
+    // #ifdef ENABLE_OTA
+    //     logger_mount_fs();  // mount FS so old log is served during WiFi window
+    // #else
+    //     logger_init();      // no WiFi window — start logging immediately
+    // #endif
 
     if (!imuInit()) {
         Serial.println("[MAIN] IMU unavailable — continuing without IMU.");
+    }
+
+    // Force recalibration for testing/commissioning
+    if (kForceImuRecalibration) {
+        imuForceRecalibration();
     }
 
     if (!transmitterInit()) {
@@ -237,7 +240,7 @@ void setup()
 
     #ifdef ENABLE_OTA
     initOTA();
-    logger_start_http();
+    // logger_start_http();
     #endif
 
     Serial.println("[MAIN] System ready.");
@@ -255,7 +258,7 @@ void loop()
             shutdownOTA();
         } else {
             ArduinoOTA.handle();
-            logger_handle_http();
+            // logger_handle_http();
         }
     }
     #endif
@@ -459,7 +462,7 @@ void loop()
                         // Set landing/ground tuning on confirmed touchdown
                         kf_set_phase(KF_PHASE_LANDING);
                         landedTimerRunning = false;
-                        logger_flush_to_fs();
+                        // logger_flush_to_fs();
                         Serial.printf("[SM] DESCENDING -> DESCENDED (alt=%.1fm vel=%.1fm/s)\n",
                                     lastKf.altitude_m, lastKf.velocity_ms);
                     }

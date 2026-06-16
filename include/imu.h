@@ -69,3 +69,10 @@ bool imuRead(ImuSample &sample);
  * @brief  Returns true if imuInit() succeeded.
  */
 bool imuReady();
+
+/**
+ * @brief  Force clear saved calibration offsets from flash.
+ *         Call this to force a recalibration on next boot.
+ *         Requires imuInit() to have been called.
+ */
+void imuForceRecalibration();
