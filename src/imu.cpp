@@ -87,6 +87,18 @@ static uint32_t _lastRecoveryMs     = 0;
 static constexpr int      kQuatFailRecoverThreshold = 10;
 static constexpr uint32_t kMinRecoveryIntervalMs    = 2000;
 
+static void _scanI2cBus()
+{
+    Serial.println("[IMU] Scanning I2C bus for devices...");
+    for (uint8_t addr = 0x01; addr < 0x7F; addr++) {
+        Wire.beginTransmission(addr);
+        uint8_t err = Wire.endTransmission();
+        if (err == 0) {
+            Serial.printf("[IMU]   Found device at address 0x%02X\n", addr);
+        }
+    }
+}
+
 static bool _loadCalibration();  // forward declaration
 
 static void _recoverI2cBus()
@@ -198,16 +210,15 @@ static bool _readOrientationFromQuat(ImuSample& sample)
     q.normalize();
 
     // Axis convention fix adapted from the BNO055 quaternion->Euler workaround.
-    // This keeps the output aligned with the rocket-frame logs used elsewhere.
-    float temp = q.x();
-    q.x() = -q.y();
-    q.y() = temp;
-    q.z() = -q.z();
+    // Fixed for +Y through nose, board vertical
+    q.x() = -q.x();
+    q.y() = -q.y();
+    // q.z and q.w stay the same
 
     imu::Vector<3> euler = q.toEuler();
-    sample.pitch = -euler.z() * RAD_TO_DEG;
-    sample.roll  = -euler.x() * RAD_TO_DEG;
-    sample.yaw   = -euler.y() * RAD_TO_DEG;
+    sample.pitch = euler.z() * RAD_TO_DEG;
+    sample.roll  = euler.x() * RAD_TO_DEG;
+    sample.yaw   = euler.y() * RAD_TO_DEG;
     return true;
 }
 
@@ -325,6 +336,7 @@ static void _saveCalibration()
 
 bool imuInit()
 {
+    Serial.printf("[IMU] Initializing I2C on SDA=GPIO%d SCL=GPIO%d\n", kImuSdaPin, kImuSclPin);
     _resetImuBus();
     delay(100);
 
@@ -332,6 +344,7 @@ bool imuInit()
     // This avoids mag interference from the rocket airframe and motor.
     bool began = false;
     for (int attempt = 0; attempt < 3 && !began; ++attempt) {
+        Serial.printf("[IMU] Attempting BNO055 init at 0x%02X (attempt %d)...\n", kBno055Address, attempt + 1);
         began = bno.begin(OPERATION_MODE_IMUPLUS);
         if (!began) {
             _resetImuBus();
@@ -388,12 +401,12 @@ bool imuRead(ImuSample &sample)
     // MAG is intentionally not checked — IMUPLUS mode does not use it.
 
     // DEBUGGING
-    // {
-    // uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
-    // bno.getCalibration(&sys, &gyro, &accel, &mag);
-    // Serial.printf("[IMU-CAL] SYS=%u GYRO=%u ACCEL=%u MAG=%u | calSaved=%d\n",
-    //               sys, gyro, accel, mag, _calSaved ? 1 : 0);
-    // }
+    {
+    uint8_t sys = 0, gyro = 0, accel = 0, mag = 0;
+    bno.getCalibration(&sys, &gyro, &accel, &mag);
+    Serial.printf("[IMU-CAL] SYS=%u GYRO=%u ACCEL=%u MAG=%u | calSaved=%d\n",
+                  sys, gyro, accel, mag, _calSaved ? 1 : 0);
+    }
     uint32_t now = millis();
     if (now - _lastDebugPrintMs >= kImuDebugPrintPeriodMs) {
         _lastDebugPrintMs = now;
@@ -412,6 +425,19 @@ bool imuRead(ImuSample &sample)
     }
 
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+void imuForceRecalibration()
+{
+    EEPROM.begin(kEepromSize);
+    EEPROM.put(kMagicAddr, 0u);  // Invalidate the magic number
+    EEPROM.commit();
+    EEPROM.end();
+
+    _calSaved = false;
+    Serial.println("[IMU] Saved calibration cleared — will recalibrate on next boot.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
